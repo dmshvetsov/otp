@@ -1,0 +1,6 @@
+[package]
+name = "OTP"
+version = "0.0.1"
+
+[addresses]
+otp = "b666ec88e97c82f1ec5612c3447fd9ba6fbe394572e115bacb9c3d3b091e171c"
