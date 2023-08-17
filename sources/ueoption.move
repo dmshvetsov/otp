@@ -117,6 +117,7 @@ module otp::ueoption {
     #[test(admin = @admin_address, issuer = @0xA)]
     fun test_underwrite_success(admin: &signer, issuer: &signer) acquires Repository {
         let admin_address = signer::address_of(admin);
+        let issuer_address = signer::address_of(issuer);
         let aptos_framework = account::create_account_for_test(@aptos_framework);
 
         timestamp::set_time_has_started_for_testing(&aptos_framework);
@@ -132,7 +133,27 @@ module otp::ueoption {
 
         let created_option = simple_map::borrow<u256, ProtocolOption>(&repo.active, &1);
         assert!(
+            created_option.state == OPTION_STATE_INITIALIZED,
+            0
+        );
+        assert!(
+            created_option.strike == 1,
+            0
+        );
+        assert!(
+            created_option.premium == 1,
+            0
+        );
+        assert!(
             created_option.expiry_ms == now * 1000000 + DEFAULT_EXPIRY_MS,
+            0
+        );
+        assert!(
+            created_option.issuer_address == issuer_address,
+            0
+        );
+        assert!(
+            created_option.holder_address == issuer_address,
             0
         );
     }
