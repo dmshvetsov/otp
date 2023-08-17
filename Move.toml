@@ -4,3 +4,11 @@ version = "0.0.1"
 
 [addresses]
 otp = "b666ec88e97c82f1ec5612c3447fd9ba6fbe394572e115bacb9c3d3b091e171c"
+admin_address = "b666ec88e97c82f1ec5612c3447fd9ba6fbe394572e115bacb9c3d3b091e171c"
+
+# [dev-addresses]
+
+[dependencies]
+AptosFramework = { git = 'https://github.com/aptos-labs/aptos-core.git', subdir = 'aptos-move/framework/aptos-framework', rev = 'mainnet' }
+
+# [dev-dependencies]
