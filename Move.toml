@@ -2,13 +2,23 @@
 name = "OTP"
 version = "0.0.1"
 
+[dependencies]
+AptosFramework = { git = 'https://github.com/aptos-labs/aptos-core.git', subdir = 'aptos-move/framework/aptos-framework', rev = 'mainnet' }
+AptosTokenObjects = { git = 'https://github.com/aptos-labs/aptos-core.git', subdir = 'aptos-move/framework/aptos-token-objects', rev = 'mainnet' }
+Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/aptos/contracts", rev = "main" }
+
+# [dev-dependencies]
+
 [addresses]
 otp = "b666ec88e97c82f1ec5612c3447fd9ba6fbe394572e115bacb9c3d3b091e171c"
 admin_address = "b666ec88e97c82f1ec5612c3447fd9ba6fbe394572e115bacb9c3d3b091e171c"
+# On deployment, these should be overridden with --named-addresses using the addresses
+# documented at https://docs.pyth.network/documentation/pythnet-price-feeds/aptos#addresses
+pyth = "_"
+deployer = "_"
+wormhole = "_"
 
-# [dev-addresses]
-
-[dependencies]
-AptosFramework = { git = 'https://github.com/aptos-labs/aptos-core.git', subdir = 'aptos-move/framework/aptos-framework', rev = 'mainnet' }
-
-# [dev-dependencies]
+[dev-addresses]
+pyth = "0xe2f37b8ac45d29d5ea23eb7d16dd3f7a7ab6426f5a998d6c23ecd3ae8d9d29eb"
+deployer = "0x277fa055b6a73c42c0662d5236c65c864ccbf2d4abd21f174a30c8b786eab84b"
+wormhole = "0x251011524cd0f76881f16e7c2d822f0c1c9510bfd2430ba24e1b3d52796df204"
