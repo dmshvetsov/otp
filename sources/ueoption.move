@@ -10,7 +10,7 @@ module otp::ueoption {
     use aptos_framework::coin;
     use aptos_framework::object::{Self, Object};
     use aptos_framework::account::{Self, SignerCapability};
-    use aptos_framework::aptos_coin::{Self, AptosCoin};
+    use aptos_framework::aptos_coin::{AptosCoin};
 
     // use aptos_token_objects::property_map;
 
@@ -18,13 +18,16 @@ module otp::ueoption {
     use pyth::price::Price;
     use pyth::price_identifier;
 
+    #[test_only]
+    friend otp::ueoption_test;
+
     /**
      *  constants
      */
-    const RA_SEED: vector<u8> = b"RA_UEOPTION";
 
     // available assets
     const ASSET_BTC: vector<u8> = b"BTC";
+    const RA_SEED: vector<u8> = b"RA_UEOPTION";
 
     // Option states
     const OPTION_STATE_CANCELED: u8 = 0;
@@ -195,7 +198,7 @@ module otp::ueoption {
     //= logic helper function
     //=
 
-    inline fun derive_option_seed(asset: String, expiry_ms: u64, num: u64): vector<u8> {
+    public(friend) inline fun derive_option_seed(asset: String, expiry_ms: u64, num: u64): vector<u8> {
         let s = copy asset;
         string::append(&mut s, string::utf8(b":"));
         string::append(&mut s, string_utils::to_string<u64>(&expiry_ms));
@@ -206,7 +209,7 @@ module otp::ueoption {
 
     // inline fun calculate_premium() {}
 
-    inline fun get_resource_account_address(): address {
+    public(friend) inline fun get_resource_account_address(): address {
         account::create_resource_address(&@admin_address, RA_SEED)
     }
 
@@ -279,6 +282,42 @@ module otp::ueoption {
     }
 
     //=
+    //= getters
+    //=
+
+    public(friend) fun get_option_strike(object_address: address): u64 acquires ProtocolOption {
+        // option.strike
+        borrow_global<ProtocolOption>(object_address).strike
+    }
+
+    public(friend) fun get_option_premium(object_address: address): u64 acquires ProtocolOption {
+        // option.premium
+        borrow_global<ProtocolOption>(object_address).premium
+    }
+
+    public(friend) fun get_option_expiry_ms(object_address: address): u64 acquires ProtocolOption {
+        // option.expiry_ms
+        borrow_global<ProtocolOption>(object_address).expiry_ms
+    }
+
+    public(friend) fun get_option_issuer_address(object_address: address): address acquires ProtocolOption {
+        // option.issuer_address
+        // option.expiry_ms
+        borrow_global<ProtocolOption>(object_address).issuer_address
+    }
+
+    //= checks
+
+    public(friend) fun is_option_state_initialized(object_address: address): bool acquires ProtocolOption {
+        // option.state == OPTION_STATE_INITIALIZED
+        borrow_global<ProtocolOption>(object_address).state == OPTION_STATE_INITIALIZED
+    }
+
+    public(friend) fun is_option_owner(object_address: address, address: address): bool {
+        let option_object = object::address_to_object<ProtocolOption>(object_address);
+        object::is_owner<ProtocolOption>(option_object, address)
+    }
+    //=
     //= assertions
     //=
 
@@ -288,6 +327,35 @@ module otp::ueoption {
             ENotAdmin
         );
     }
+}
+
+/*
+
+--- tests ---
+
+*/
+
+#[test_only]
+module otp::ueoption_test {
+    use otp::ueoption::{Self, ProtocolOption};
+
+    use std::signer;
+    use std::timestamp;
+    use std::string::{Self};
+
+    use aptos_framework::coin;
+    use aptos_framework::object::{Self};
+    use aptos_framework::account::{Self};
+    use aptos_framework::aptos_coin::{Self, AptosCoin};
+
+    // use aptos_token_objects::property_map;
+
+    // use pyth::pyth;
+    // use aptos_std::debug;
+    // use wormhole::wormhole;
+
+    // FIXME: whu it is required?
+    const RA_SEED: vector<u8> = b"RA_UEOPTION";
 
     //=
     //= tests
@@ -296,35 +364,35 @@ module otp::ueoption {
     fun test_initialize_success(admin: &signer) {
         let admin_address = signer::address_of(admin);
 
-        initialize(admin, 7 * 24 * 60 * 60 * 1000000);
-        let expected_ra_addr = account::create_resource_address(&admin_address, RA_SEED);
+        ueoption::initialize(admin, 7 * 24 * 60 * 60 * 1000000);
+        let expected_ra_addr = account::create_resource_address(&admin_address, b"RA_UEOPTION");
         assert!(account::exists_at(expected_ra_addr), 0);
     }
 
     #[test()]
     fun test_derive_option_seed() {
         assert!(
-            derive_option_seed(string::utf8(b"BTC"), 1, 1) == b"BTC:1:1",
+            ueoption::derive_option_seed(string::utf8(b"BTC"), 1, 1) == b"BTC:1:1",
             0
         );
         assert!(
-            derive_option_seed(string::utf8(b"BTC"), 10, 111) == b"BTC:10:111",
+            ueoption::derive_option_seed(string::utf8(b"BTC"), 10, 111) == b"BTC:10:111",
             0
         );
         assert!(
-            derive_option_seed(string::utf8(b"BTC"), 1230001000200030004, 235) == b"BTC:1230001000200030004:235",
+            ueoption::derive_option_seed(string::utf8(b"BTC"), 1230001000200030004, 235) == b"BTC:1230001000200030004:235",
             0
         );
     }
 
     #[test(admin = @admin_address)]
-    fun test_underwrite_success(admin: &signer) acquires Repository, ProtocolOption {
+    fun test_underwrite_success(admin: &signer) {
         let aptos_framework = account::create_account_for_test(@aptos_framework);
 
         timestamp::set_time_has_started_for_testing(&aptos_framework);
 
         let default_expiry_ms = 100;
-        initialize(admin, default_expiry_ms);
+        ueoption::initialize(admin, default_expiry_ms);
 
         let now = 10;
         timestamp::fast_forward_seconds(now);
@@ -332,36 +400,34 @@ module otp::ueoption {
         let issuer_address = @0xA;
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
-        underwrite(&issuer);
+        ueoption::underwrite(&issuer);
 
-        let ra_address = get_resource_account_address();
+        let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = object::create_object_address(&ra_address, b"BTC:10000100:1");
-        let created_option = borrow_global<ProtocolOption>(expected_new_option_address);
 
         assert!(
-            created_option.state == OPTION_STATE_INITIALIZED,
+            ueoption::is_option_state_initialized(expected_new_option_address),
             0
         );
         assert!(
-            created_option.strike == 1,
+            ueoption::get_option_strike(expected_new_option_address) == 1,
             0
         );
         assert!(
-            created_option.premium == 1,
+            ueoption::get_option_premium(expected_new_option_address) == 1,
             0
         );
         assert!(
-            created_option.expiry_ms == now * 1000000 + default_expiry_ms,
+            ueoption::get_option_expiry_ms(expected_new_option_address) == now * 1000000 + default_expiry_ms,
             0
         );
         assert!(
-            created_option.issuer_address == issuer_address,
+            ueoption::get_option_issuer_address(expected_new_option_address) == issuer_address,
             0
         );
 
-        let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
-            object::owner<ProtocolOption>(created_option_object) == ra_address,
+            ueoption::is_option_owner(expected_new_option_address, ra_address),
             0 // assert listed in platform escrow resource account
         );
         // assert!(
@@ -371,7 +437,7 @@ module otp::ueoption {
     }
 
     #[test(admin = @admin_address)]
-    fun test_buy_success(admin: &signer) acquires Repository, ProtocolOption {
+    fun test_buy_success(admin: &signer) {
         let aptos_framework = account::create_account_for_test(@aptos_framework);
         timestamp::set_time_has_started_for_testing(&aptos_framework);
         let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(&aptos_framework);
@@ -389,12 +455,12 @@ module otp::ueoption {
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 1000000;
-        initialize(admin, option_expiry_ms);
-        underwrite(&issuer);
+        ueoption::initialize(admin, option_expiry_ms);
+        ueoption::underwrite(&issuer);
 
-        let ra_address = get_resource_account_address();
+        let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = object::create_object_address(&ra_address, b"BTC:11000000:1");
-        buy(&buyer, expected_new_option_address);
+        ueoption::buy(&buyer, expected_new_option_address);
 
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -415,16 +481,20 @@ module otp::ueoption {
         coin::destroy_mint_cap(mint_cap);
     }
 
-    // #[test()]
-    // fun test_get_asset_price_btc() {
-    //     debug::print(&@pyth);
-    //     debug::print(&@deployer);
-    //     let deployer = account::create_signer_with_capability(
-    //         &account::create_test_signer_cap(
-    //             @deployer
-    //         )
+    // #[test(aptos_framework = @aptos_framework)]
+    // fun test_get_asset_price_btc(aptos_framework: &signer) {
+    //     std::timestamp::set_time_has_started_for_testing(aptos_framework);
+    //     wormhole::init_test(
+    //         22,
+    //         1,
+    //         x"0000000000000000000000000000000000000000000000000000000000000004",
+    //         x"beFA429d57cD18b7F8A4d91A2da9AB4AF05d0FBe",
+    //         100000 
     //     );
-    //     let (_, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
+    //     let deployer = account::create_signer_with_capability(
+    //         &account::create_test_signer_cap(@deployer)
+    //     );
+    //     let (ra, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
     //     pyth::init_test(
     //         pyth_signer_capability,
     //         500,
@@ -433,8 +503,14 @@ module otp::ueoption {
     //         vector[],
     //         50
     //     );
-    //
-    //     debug::print(&get_asset_price(ASSET_BTC));
+    //     pyth::update_cache_for_test(vector::empty());
+
+    //     let (burn_capability, mint_capability) = aptos_coin::initialize_for_test(aptos_framework);
+    
+    //     debug::print(&ueoption::get_asset_price(b"BTC"));
+
+    //     coin::destroy_mint_cap(mint_capability);
+    //     coin::destroy_burn_cap(burn_capability);
     // }
 
     // #[test()]
