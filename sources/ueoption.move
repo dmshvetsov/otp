@@ -350,9 +350,15 @@ module otp::ueoption_test {
 
     // use aptos_token_objects::property_map;
 
-    // use pyth::pyth;
-    // use aptos_std::debug;
-    // use wormhole::wormhole;
+    use pyth::pyth;
+    use pyth::price_info;
+    use pyth::price_feed;
+    use pyth::price_identifier;
+    use pyth::i64;
+    use pyth::price;
+    use pyth::pyth_test;
+    use aptos_std::debug;
+    use wormhole::wormhole;
 
     // FIXME: whu it is required?
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
@@ -481,37 +487,71 @@ module otp::ueoption_test {
         coin::destroy_mint_cap(mint_cap);
     }
 
-    // #[test(aptos_framework = @aptos_framework)]
-    // fun test_get_asset_price_btc(aptos_framework: &signer) {
-    //     std::timestamp::set_time_has_started_for_testing(aptos_framework);
-    //     wormhole::init_test(
-    //         22,
-    //         1,
-    //         x"0000000000000000000000000000000000000000000000000000000000000004",
-    //         x"beFA429d57cD18b7F8A4d91A2da9AB4AF05d0FBe",
-    //         100000 
-    //     );
-    //     let deployer = account::create_signer_with_capability(
-    //         &account::create_test_signer_cap(@deployer)
-    //     );
-    //     let (ra, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
-    //     pyth::init_test(
-    //         pyth_signer_capability,
-    //         500,
-    //         1,
-    //         x"5d1f252d5de865279b00c84bce362774c2804294ed53299bc4a0389a5defef92",
-    //         vector[],
-    //         50
-    //     );
-    //     pyth::update_cache_for_test(vector::empty());
+    #[test(aptos_framework = @aptos_framework)]
+    fun test_get_asset_price_btc(aptos_framework: &signer) {
+        timestamp::set_time_has_started_for_testing(aptos_framework);
+        timestamp::update_global_time_for_test_secs(1000);
+        let deployer = account::create_signer_with_capability(
+            &account::create_test_signer_cap(@deployer)
+        );
+        let (_ra, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
+        pyth::init_test(
+            pyth_signer_capability,
+            500, // stale price threshold
+            1, // update fee
+            x"5d1f252d5de865279b00c84bce362774c2804294ed53299bc4a0389a5defef92",
+            vector[],
+            50
+        );
+        pyth_test::update_cache_for_test(
+            vector[
+                // struct PriceInfo has copy, drop, store {
+                //     attestation_time: u64,
+                //     arrival_time: u64,
+                //     price_feed: PriceFeed {
+                //         price_identifier: PriceIdentifier,
+                //         price: Price {
+                //           price: I64 {
+                //             negative: bool,
+                //             mmagnitude: u64,
+                //           },
+                //           conf: u64,
+                //           expo: I64,
+                //           timestamp: u64,
+                //         },
+                //         ema_price: Price
+                //     },
+                // }
+                price_info::new(
+                    timestamp::now_seconds() - 1, 
+                    timestamp::now_seconds() - 2, 
+                    // 1693821648,
+                    // 1693821650,
+                    price_feed::new(
+                        price_identifier::from_byte_vec(x"f9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b"),
+                        price::new(
+                            i64::new(2594760112405, false),
+                            830112404,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                        price::new(
+                            i64::new(2595868730000, false),
+                            782335890,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                    ),
+                ),
+            ]
+        );
 
-    //     let (burn_capability, mint_capability) = aptos_coin::initialize_for_test(aptos_framework);
-    
-    //     debug::print(&ueoption::get_asset_price(b"BTC"));
-
-    //     coin::destroy_mint_cap(mint_capability);
-    //     coin::destroy_burn_cap(burn_capability);
-    // }
+        let btc_price = ueoption::get_asset_price(b"BTC"); 
+        assert!(
+             i64::get_magnitude_if_positive(&price::get_price(&btc_price)) == 2594760112405,
+            0
+        );
+    }
 
     // #[test()]
     // #[expected_failure(abort_code = 0x1, location = Self)]
