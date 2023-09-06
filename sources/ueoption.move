@@ -347,6 +347,7 @@ module otp::ueoption_test {
     use aptos_framework::object::{Self};
     use aptos_framework::account::{Self};
     use aptos_framework::aptos_coin::{Self, AptosCoin};
+    use aptos_framework::coin::{BurnCapability, MintCapability};
 
     // use aptos_token_objects::property_map;
 
@@ -390,7 +391,7 @@ module otp::ueoption_test {
 
     #[test(admin = @admin_address)]
     fun test_underwrite_success(admin: &signer) {
-        let (aptos_framework) = setup_test_framework();
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         let default_expiry_ms = 100;
         ueoption::initialize(admin, default_expiry_ms);
@@ -436,14 +437,13 @@ module otp::ueoption_test {
         //     0 // assert issuer own the option
         // );
 
-        teardown_test_framework();
+        teardown_test_framework(burn_cap, mint_cap);
     }
 
     #[test(admin = @admin_address)]
     fun test_buy_success(admin: &signer) {
-        let aptos_framework = setup_test_framework();
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
-        let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(&aptos_framework);
         let issuer_address = @0xA;
         let buyer_address = @0xB;
         let issuer = account::create_account_for_test(issuer_address);
@@ -479,16 +479,12 @@ module otp::ueoption_test {
             0
         );
 
-        // tear down
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
-
-        teardown_test_framework();
+        teardown_test_framework(burn_cap, mint_cap);
     }
 
     #[test(aptos_framework = @aptos_framework)]
     fun test_get_asset_price_btc(aptos_framework: &signer) {
-        let (aptos_framework) = setup_test_framework();
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         timestamp::update_global_time_for_test_secs(1000);
 
@@ -575,28 +571,29 @@ module otp::ueoption_test {
             0
         );
 
-        teardown_test_framework();
+        teardown_test_framework(burn_cap, mint_cap);
     }
 
     #[test()]
     #[expected_failure(abort_code = 0x1, location = otp::ueoption)]
     fun test_get_asset_price_unsupported_asset() {
-        setup_test_framework();
+        let (_, burn_cap, mint_cap) = setup_test_framework();
         setup_price_oracle();
 
         ueoption::get_asset_price(b"WTF");
 
-        teardown_test_framework();
+        teardown_test_framework(burn_cap, mint_cap);
     }
 
     //=
     //= test setup and teardown
     //=
 
-    fun setup_test_framework(): (signer) {
+    fun setup_test_framework(): (signer, BurnCapability<AptosCoin>, MintCapability<AptosCoin>) {
         let aptos_framework = account::create_account_for_test(@aptos_framework);
         timestamp::set_time_has_started_for_testing(&aptos_framework);
-        (aptos_framework)
+        let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(&aptos_framework);
+        (aptos_framework, burn_cap, mint_cap)
     }
 
     fun setup_price_oracle() {
@@ -614,7 +611,8 @@ module otp::ueoption_test {
         );
     }
 
-    fun teardown_test_framework() {
-        // nothig yet
+    fun teardown_test_framework(burn_cap: BurnCapability<AptosCoin>, mint_cap: MintCapability<AptosCoin>) {
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
     }
 }
