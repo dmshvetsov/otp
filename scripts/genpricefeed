@@ -1,0 +1,43 @@
+#! /usr/bin/env node
+
+// generate vaa
+// only test net support
+
+// system requirements: node js 18+ installed
+
+// @ts-nocheck
+
+(async () => {
+    const { inspect } = require('node:util')
+
+    /**
+     *  Helpers
+     */
+
+    async function fetchPyth(path) {
+        const res = await fetch(
+            new URL(path, `https://xc-testnet.pyth.network`),
+            { 
+                headers: { 'accept': 'application/json' }
+            }
+        )
+        if (res.status >= 300) {
+            console.log(res.status, res.statusText)
+            console.log(inspect(await res.json().catch(() => res.text()), {
+                colors: true,
+                depth: 20
+            }))
+            process.exit(1)
+        }
+        return res.json().catch(() => res.text())
+    }
+
+    /**
+     * Fetch logic
+     */
+
+    const btcUsdFeed = '0xf9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b'
+    const fiveSecAgo = Date.now() / 1000 - 5
+    const payload = await fetchPyth(`/api/get_price_feed?id=${btcUsdFeed}&publish_time=${fiveSecAgo}`)
+    console.log(inspect(payload, { colors: true, depth: 10 }))
+})().catch(console.error)
