@@ -360,12 +360,9 @@ module otp::ueoption_test {
     use aptos_std::debug;
     use wormhole::wormhole;
 
-    // FIXME: whu it is required?
+    // FIXME: why it is required?
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
 
-    //=
-    //= tests
-    //=
     #[test(admin = @admin_address)]
     fun test_initialize_success(admin: &signer) {
         let admin_address = signer::address_of(admin);
@@ -393,9 +390,7 @@ module otp::ueoption_test {
 
     #[test(admin = @admin_address)]
     fun test_underwrite_success(admin: &signer) {
-        let aptos_framework = account::create_account_for_test(@aptos_framework);
-
-        timestamp::set_time_has_started_for_testing(&aptos_framework);
+        let (aptos_framework) = setup_test_framework();
 
         let default_expiry_ms = 100;
         ueoption::initialize(admin, default_expiry_ms);
@@ -440,12 +435,14 @@ module otp::ueoption_test {
         //     object::owner<ProtocolOption>(created_option_object) == issuer_address,
         //     0 // assert issuer own the option
         // );
+
+        teardown_test_framework();
     }
 
     #[test(admin = @admin_address)]
     fun test_buy_success(admin: &signer) {
-        let aptos_framework = account::create_account_for_test(@aptos_framework);
-        timestamp::set_time_has_started_for_testing(&aptos_framework);
+        let aptos_framework = setup_test_framework();
+
         let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(&aptos_framework);
         let issuer_address = @0xA;
         let buyer_address = @0xB;
@@ -485,24 +482,18 @@ module otp::ueoption_test {
         // tear down
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
+
+        teardown_test_framework();
     }
 
     #[test(aptos_framework = @aptos_framework)]
     fun test_get_asset_price_btc(aptos_framework: &signer) {
-        timestamp::set_time_has_started_for_testing(aptos_framework);
+        let (aptos_framework) = setup_test_framework();
+
         timestamp::update_global_time_for_test_secs(1000);
-        let deployer = account::create_signer_with_capability(
-            &account::create_test_signer_cap(@deployer)
-        );
-        let (_ra, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
-        pyth::init_test(
-            pyth_signer_capability,
-            500, // stale price threshold
-            1, // update fee
-            x"5d1f252d5de865279b00c84bce362774c2804294ed53299bc4a0389a5defef92",
-            vector[],
-            50
-        );
+
+        setup_price_oracle();
+
         pyth_test::update_cache_for_test(
             vector[
                 // struct PriceInfo has copy, drop, store {
@@ -551,26 +542,79 @@ module otp::ueoption_test {
              i64::get_magnitude_if_positive(&price::get_price(&btc_price)) == 2594760112405,
             0
         );
+
+        timestamp::fast_forward_seconds(60);
+
+        pyth_test::update_cache_for_test(
+            vector[
+                price_info::new(
+                    timestamp::now_seconds() - 1, 
+                    timestamp::now_seconds() - 2, 
+                    price_feed::new(
+                        price_identifier::from_byte_vec(x"f9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b"),
+                        price::new(
+                            i64::new(2600150002888, false),
+                            830112404,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                        price::new(
+                            i64::new(2597899730000, false),
+                            782335890,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                    ),
+                ),
+            ]
+        );
+
+        let btc_price = ueoption::get_asset_price(b"BTC"); 
+        assert!(
+             i64::get_magnitude_if_positive(&price::get_price(&btc_price)) == 2600150002888,
+            0
+        );
+
+        teardown_test_framework();
     }
 
-    // #[test()]
-    // #[expected_failure(abort_code = 0x1, location = Self)]
-    // fun test_get_asset_price_unsupported_asset() {
-    //     let deployer = account::create_signer_with_capability(
-    //         &account::create_test_signer_cap(
-    //             @deployer
-    //         )
-    //     );
-    //     let (_, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
-    //     pyth::init_test(
-    //         pyth_signer_capability,
-    //         500,
-    //         1,
-    //         x"5d1f252d5de865279b00c84bce362774c2804294ed53299bc4a0389a5defef92",
-    //         vector[],
-    //         50
-    //     );
-    //
-    //     get_asset_price(b"WTF");
-    // }
+    #[test()]
+    #[expected_failure(abort_code = 0x1, location = otp::ueoption)]
+    fun test_get_asset_price_unsupported_asset() {
+        setup_test_framework();
+        setup_price_oracle();
+
+        ueoption::get_asset_price(b"WTF");
+
+        teardown_test_framework();
+    }
+
+    //=
+    //= test setup and teardown
+    //=
+
+    fun setup_test_framework(): (signer) {
+        let aptos_framework = account::create_account_for_test(@aptos_framework);
+        timestamp::set_time_has_started_for_testing(&aptos_framework);
+        (aptos_framework)
+    }
+
+    fun setup_price_oracle() {
+        let deployer = account::create_signer_with_capability(
+            &account::create_test_signer_cap(@deployer)
+        );
+        let (_ra, pyth_signer_capability) = account::create_resource_account(&deployer, b"pyth");
+        pyth::init_test(
+            pyth_signer_capability,
+            500, // stale price threshold
+            1, // update fee
+            x"5d1f252d5de865279b00c84bce362774c2804294ed53299bc4a0389a5defef92",
+            vector[],
+            50
+        );
+    }
+
+    fun teardown_test_framework() {
+        // nothig yet
+    }
 }
