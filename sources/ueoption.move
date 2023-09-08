@@ -33,7 +33,9 @@ module otp::ueoption {
      */
 
     // available assets
-    const ASSET_BTC: vector<u8> = b"BTC";
+    const ASSET_WBTC: vector<u8> = b"WBTC";
+    const ASSET_APT: vector<u8> = b"APT";
+
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
 
     // Option states
@@ -195,12 +197,16 @@ module otp::ueoption {
     /// https://github.com/pyth-network/pyth-js/tree/main/pyth-aptos-js should be used to
     /// fetch the pyth_update_data off-chain and pass it in. More information about how this
     /// works can be found at https://docs.pyth.network/documentation/pythnet-price-feeds/aptos
+    ///
+    /// list of price feeds https://pyth.network/developers/price-feed-ids
     public fun get_asset_price(asset: vector<u8>): Price {
         // let coins = coin::withdraw(admin, pyth::get_update_fee(&pyth_update_data));
         // pyth::update_price_feeds(pyth_update_data, coins);
 
-        let asset_id = if (asset == ASSET_BTC) {
-            x"f9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b"
+        let asset_id = if (asset == ASSET_WBTC) {
+            x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed"
+        } else if (asset == ASSET_APT) {
+            x"44a93dddd8effa54ea51076c4e851b6cbbfd938e82eb90197de38fe8876bb66e"
         } else {
             x"00"
         };
@@ -210,28 +216,24 @@ module otp::ueoption {
     }
 
     fun get_asset_decimals(asset: vector<u8>): u8 {
-        let number_of_decimals: u8 = if (asset == ASSET_BTC) {
-            // TODO: dinamically check how many digits on right before asset will be single digit
-            // e.g 25900 BTC has 4 digits befor it became 2, thus option has 4 decimals
+        // TODO: dynamically check how many digits on right before asset will be single digit
+        let number_of_decimals: u8 = if (asset == ASSET_WBTC) {
+            // e.g 25900 BTC has 4 digits before it became 2 USD per BTC, thus option has 4 decimals
             4
+        } else if (asset == ASSET_APT) {
+            // e.g 5.8 APT has 0 digits before it became 5 USD per APT, thus option has 0 decimals
+            0
         } else {
-            // 32 is max decimls possible in Aptos
+            // 32 is max decimls possible in Aptos network
             33
         };
-        assert!(number_of_decimals != 33, EUnsupportedAsset);
+        assert!(number_of_decimals < 33, EUnsupportedAsset);
 
         number_of_decimals
     }
 
-    fun get_asset_icon_uri(asset: vector<u8>): String {
-        let icon_uri = if (asset == ASSET_BTC) {
-            b"FIXME: ADD BTC ICON"
-        } else {
-            b""
-        };
-        assert!(icon_uri != b"", EUnsupportedAsset);
-
-        string::utf8(icon_uri)
+    fun get_asset_icon_uri(_asset: vector<u8>): String {
+        string::utf8(b"FIXME: ADD ASSET ICONS")
     }
 
     //=
@@ -466,15 +468,15 @@ module otp::ueoption_test {
     #[test()]
     fun test_derive_option_seed() {
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"BTC"), 1) == b"BTC:1",
+            ueoption::derive_option_seed(string::utf8(b"WBTC"), 1) == b"WBTC:1",
             0
         );
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"BTC"), 10) == b"BTC:10",
+            ueoption::derive_option_seed(string::utf8(b"WBTC"), 10) == b"WBTC:10",
             0
         );
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"BTC"), 1230001000200030004) == b"BTC:1230001000200030004",
+            ueoption::derive_option_seed(string::utf8(b"WBTC"), 1230001000200030004) == b"WBTC:1230001000200030004",
             0
         );
     }
@@ -493,13 +495,13 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
 
-        ueoption::underwrite(&issuer, b"BTC", 1_000, 100, 250);
+        ueoption::underwrite(&issuer, b"WBTC", 1_000, 100, 250);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"BTC:10000100")
+            &string::utf8(b"WBTC:10000100")
         );
 
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
@@ -551,8 +553,8 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
 
-        ueoption::underwrite(&issuer, b"BTC", 1, 1, 1);
-        ueoption::underwrite(&issuer, b"BTC", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"WBTC", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"WBTC", 1, 1, 1);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
@@ -576,15 +578,15 @@ module otp::ueoption_test {
 
         let option_expiry_ms = 1000000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"BTC", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"WBTC", 1, 1, 1);
 
-        ueoption::buy(&buyer, string::utf8(b"BTC:11000000"), 1);
+        ueoption::buy(&buyer, string::utf8(b"WBTC:11000000"), 1);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"BTC:11000000")
+            &string::utf8(b"WBTC:11000000")
         );
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -630,15 +632,15 @@ module otp::ueoption_test {
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"BTC", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"WBTC", 100, 10, 2);
 
-        ueoption::buy(&buyer, string::utf8(b"BTC:3000000"), 3);
+        ueoption::buy(&buyer, string::utf8(b"WBTC:3000000"), 3);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"BTC:3000000")
+            &string::utf8(b"WBTC:3000000")
         );
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -690,9 +692,9 @@ module otp::ueoption_test {
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"BTC", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"WBTC", 100, 10, 2);
 
-        ueoption::buy(&buyer, string::utf8(b"BTC:3000000"), 11);
+        ueoption::buy(&buyer, string::utf8(b"WBTC:3000000"), 11);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
@@ -717,15 +719,15 @@ module otp::ueoption_test {
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"BTC", 10, 1, 1);
+        ueoption::underwrite(&issuer, b"WBTC", 10, 1, 1);
 
-        ueoption::buy(&buyer, string::utf8(b"BTC:3000000"), 2);
+        ueoption::buy(&buyer, string::utf8(b"WBTC:3000000"), 2);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
 
     #[test()]
-    fun test_get_asset_price_btc() {
+    fun test_get_asset_price_wbtc() {
         let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         timestamp::update_global_time_for_test_secs(1000);
@@ -755,7 +757,7 @@ module otp::ueoption_test {
                     timestamp::now_seconds() - 1, 
                     timestamp::now_seconds() - 2, 
                     price_feed::new(
-                        price_identifier::from_byte_vec(x"f9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b"),
+                        price_identifier::from_byte_vec(x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed"),
                         price::new(
                             i64::new(2594760112405, false),
                             830112404,
@@ -773,7 +775,7 @@ module otp::ueoption_test {
             ]
         );
 
-        let btc_price = ueoption::get_asset_price(b"BTC"); 
+        let btc_price = ueoption::get_asset_price(b"WBTC"); 
         assert!(
              i64::get_magnitude_if_positive(&price::get_price(&btc_price)) == 2594760112405,
             0
@@ -787,7 +789,7 @@ module otp::ueoption_test {
                     timestamp::now_seconds() - 1, 
                     timestamp::now_seconds() - 2, 
                     price_feed::new(
-                        price_identifier::from_byte_vec(x"f9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b"),
+                        price_identifier::from_byte_vec(x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed"),
                         price::new(
                             i64::new(2600150002888, false),
                             830112404,
@@ -805,7 +807,7 @@ module otp::ueoption_test {
             ]
         );
 
-        let btc_price = ueoption::get_asset_price(b"BTC"); 
+        let btc_price = ueoption::get_asset_price(b"WBTC"); 
         assert!(
              i64::get_magnitude_if_positive(&price::get_price(&btc_price)) == 2600150002888,
             0
