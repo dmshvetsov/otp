@@ -62,6 +62,7 @@ module otp::ueoption {
     const EOptionNotFound: u64 = 2;
     const EAccountHasNotRegisteredAptosCoin: u64 = 3;
     const EOptionDuplicate: u64 = 500;
+    const EOptionNotEnougSupply: u64 = 501;
     const EInternalError: u64 = 1000;
 
     /**
@@ -657,8 +658,60 @@ module otp::ueoption_test {
         teardown_test_framework(burn_cap, mint_cap);
     }
 
-    // #[test(admin = @admin_address)]
-    // fun test_buy_over_supply_failure(admin: &signer) {}
+    #[test(admin = @admin_address)]
+    // #[expected_failure(abort_code = 0x1F, location = otp::ueoption)]
+    #[expected_failure(abort_code = 0x20005, location = aptos_framework::fungible_asset)]
+    fun test_buy_over_supply_failure(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<AptosCoin>(&buyer);
+        aptos_coin::mint(&aptos_framework, buyer_address, 150);
+
+        timestamp::set_time_has_started_for_testing(&aptos_framework);
+
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let option_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, option_expiry_ms);
+        ueoption::underwrite(&issuer, b"BTC", 100, 10, 2);
+
+        ueoption::buy(&buyer, string::utf8(b"BTC:3000000"), 11);
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
+
+    #[test(admin = @admin_address)]
+    #[expected_failure(abort_code = 0x10006, location = aptos_framework::coin)]
+    fun test_buy_not_enough_funds_failure(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<AptosCoin>(&buyer);
+        aptos_coin::mint(&aptos_framework, buyer_address, 1);
+
+        timestamp::set_time_has_started_for_testing(&aptos_framework);
+
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let option_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, option_expiry_ms);
+        ueoption::underwrite(&issuer, b"BTC", 10, 1, 1);
+
+        ueoption::buy(&buyer, string::utf8(b"BTC:3000000"), 2);
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
 
     #[test(aptos_framework = @aptos_framework)]
     fun test_get_asset_price_btc(aptos_framework: &signer) {
