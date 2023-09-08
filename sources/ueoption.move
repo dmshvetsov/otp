@@ -17,6 +17,7 @@ module otp::ueoption {
     use aptos_framework::fungible_asset;
 
     use aptos_token_objects::token;
+    use aptos_token_objects::royalty;
     use aptos_token_objects::collection;
     use aptos_token_objects::property_map;
 
@@ -74,11 +75,15 @@ module otp::ueoption {
         mint_ref: fungible_asset::MintRef,
         burn_ref: fungible_asset::BurnRef,
     }
-
-    // better name needed than State
+    
     struct Repository has key {
+        /// list of active options
+        /// SimpleMap<time bucket, start of the day UTC, vector of token names>
         options: SimpleMap<u64, vector<String>>,
+        /// default expiry for options, deprecated, do not use
         default_expiry_ms: u64,
+        /// fees in form of royalties, range from 0 to 100
+        sell_fee: u64,
         signer_cap: SignerCapability
     }
 
@@ -97,6 +102,7 @@ module otp::ueoption {
                 options: simple_map::create(),
                 default_expiry_ms,
                 signer_cap,
+                sell_fee: 0 // no fees, to incentivize trades
             }
         );
     }
@@ -120,7 +126,7 @@ module otp::ueoption {
         let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
         let bucket_key = get_day_bucket(expiry_ms);
         let option_name = create_option_object(
-            &ra_signer, asset, issuer_address, expiry_ms, supply_amount, multiplier, premium
+            &ra_signer, asset, issuer_address, repo.sell_fee, expiry_ms, supply_amount, multiplier, premium
         );
         if (simple_map::contains_key(&repo.options, &bucket_key)) {
             let expiry_bucket = simple_map::borrow_mut(&mut repo.options, &bucket_key);
@@ -137,30 +143,6 @@ module otp::ueoption {
             simple_map::add(&mut repo.options, bucket_key, new_expiry_bucket);
         };
     }
-
-    // public entry fun list(holder: &signer, option_address: address) acquires Repository, ProtocolOption {
-    //     let ra_address = get_resource_account_address();
-    //     let repo = borrow_global_mut<Repository>(ra_address);
-    //     assert!(
-    //         exists<ProtocolOption>(option_address),
-    //         EOptionNotFound
-    //     );
-    //
-    //     let option = borrow_global<ProtocolOption>(option_address);
-    //     let expiry_bucket = simple_map::borrow(&mut repo.options, &get_day_bucket(option.expiry_ms));
-    //     assert!(
-    //         vector::contains(expiry_bucket, &option_address),
-    //         EInternalError
-    //     );
-    //
-    //     let option_object = object::address_to_object<ProtocolOption>(option_address);
-    //     // FIXME add fees
-    //     object::transfer(
-    //         holder,
-    //         option_object,
-    //         ra_address,
-    //     );
-    // }
 
     public entry fun buy(buyer: &signer, option_name: String, amount: u64) acquires Repository, ProtocolOption {
         let ra_address = get_resource_account_address();
@@ -183,7 +165,6 @@ module otp::ueoption {
             EInternalError
         );
 
-        // TODO: add fees
         let option_premium = property_map::read_u64(
             &option_object,
             &string::utf8(OPTION_PROPERTY_PREMIUM_KEY)
@@ -280,7 +261,7 @@ module otp::ueoption {
             creator,
             string::utf8(COLLECTION_DESCRIPTION),
             string::utf8(COLLECTION_NAME),
-            option::none(), // FIXME what roaylty to set?
+            option::none(), // roalties are set per token
             string::utf8(COLLECTION_URI),
         );
     }
@@ -289,18 +270,27 @@ module otp::ueoption {
         creator: &signer,
         asset: vector<u8>,
         issuer_address: address,
+        royalty: u64,
         expiry_ms: u64,
         supply_amount: u64,
         multiplier: u64,
         premium: u64
     ): String {
         let token_name = string::utf8(derive_option_seed(string::utf8(asset), expiry_ms));
+        let royalty = if (royalty > 0) {
+            let ra_address = get_resource_account_address();
+            option::some(
+                royalty::create(royalty, 100, ra_address)
+            )
+        } else {
+            option::none()
+        };
         let constructor_ref = token::create_named_token(
             creator,
             string::utf8(COLLECTION_NAME),
             string::utf8(LE_TOKEN_DESCRIPTION),
             token_name,
-            option::none(),
+            royalty,
             string::utf8(LE_TOKEN_URI),
         );
         let object_signer = object::generate_signer(&constructor_ref);
@@ -399,6 +389,16 @@ module otp::ueoption {
             ENotAdmin
         );
     }
+    
+    //=
+    //= friends helpers
+    //=
+    
+    public(friend) fun get_repo_values(): (SimpleMap<u64, vector<String>>, u64) acquires Repository {
+        let ra_address = get_resource_account_address();
+        let repo = borrow_global<Repository>(ra_address);
+        (repo.options, repo.sell_fee)
+    }
 }
 
 /*
@@ -435,7 +435,6 @@ module otp::ueoption_test {
     use pyth::price;
     use pyth::pyth_test;
     use aptos_std::debug;
-    use wormhole::wormhole;
 
     // FIXME: why it is required?
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
@@ -449,6 +448,19 @@ module otp::ueoption_test {
         ueoption::initialize(admin, 7 * 24 * 60 * 60 * 1000000);
         let expected_ra_addr = account::create_resource_address(&admin_address, b"RA_UEOPTION");
         assert!(account::exists_at(expected_ra_addr), 0);
+        // TODO: test repo state
+    }
+
+    #[test(admin = @admin_address)]
+    fun test_initialized_with_incentive_of_zero_sell_fees(admin: &signer) {
+        let admin_address = signer::address_of(admin);
+
+        ueoption::initialize(admin, 60_000_000);
+        let (_, sell_fee) = ueoption::get_repo_values();
+        assert!(
+            sell_fee == 0,
+            ETestExpectationFailure
+        )
     }
 
     #[test()]
@@ -469,7 +481,7 @@ module otp::ueoption_test {
 
     #[test(admin = @admin_address)]
     fun test_underwrite_success(admin: &signer) {
-        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         let default_expiry_ms = 100;
         ueoption::initialize(admin, default_expiry_ms);
@@ -527,7 +539,7 @@ module otp::ueoption_test {
     // #[expected_failure(abort_code = 0x500, location = otp::ueoption)]
     #[expected_failure(abort_code = 0x80001, location = std::object)]
     fun test_underwrite_same_twice_failure(admin: &signer) {
-        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         let default_expiry_ms = 1000000;
         ueoption::initialize(admin, default_expiry_ms);
@@ -579,7 +591,6 @@ module otp::ueoption_test {
             primary_fungible_store::balance(buyer_address, created_option_object) == 1,
             ETestExpectationFailure
         );
-        debug::print(&fungible_asset::balance(created_option_object));
         assert!(
             fungible_asset::supply(created_option_object) == fungible_asset::maximum(created_option_object),
             ETestExpectationFailure // no remaining supply left
@@ -713,9 +724,9 @@ module otp::ueoption_test {
         teardown_test_framework(burn_cap, mint_cap);
     }
 
-    #[test(aptos_framework = @aptos_framework)]
-    fun test_get_asset_price_btc(aptos_framework: &signer) {
-        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+    #[test()]
+    fun test_get_asset_price_btc() {
+        let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         timestamp::update_global_time_for_test_secs(1000);
 
