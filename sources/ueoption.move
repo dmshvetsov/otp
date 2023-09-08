@@ -10,11 +10,11 @@ module otp::ueoption {
     use aptos_std::string_utils;
 
     use aptos_framework::coin;
-    use aptos_framework::object::{Self, Object};
+    use aptos_framework::object;
     use aptos_framework::account::{Self, SignerCapability};
     use aptos_framework::aptos_coin::{AptosCoin};
     use aptos_framework::primary_fungible_store;
-    use aptos_framework::fungible_asset::{Self, Metadata};
+    use aptos_framework::fungible_asset;
 
     use aptos_token_objects::token;
     use aptos_token_objects::collection;
@@ -60,6 +60,7 @@ module otp::ueoption {
     const EUnsupportedAsset: u64 = 1;
     const EOptionNotFound: u64 = 2;
     const EAccountHasNotRegisteredAptosCoin: u64 = 3;
+    const EOptionDuplicate: u64 = 500;
     const EInternalError: u64 = 1000;
 
     /**
@@ -358,7 +359,6 @@ module otp::ueoption {
 
     fun get_option_address_with_asset_expiry(asset: vector<u8>, expiry_ms: u64): address {
         let token_name = derive_option_seed(string::utf8(asset), expiry_ms);
-        let ra_address = get_resource_account_address();
         get_option_address_with_name(&string::utf8(token_name))
     }
 
@@ -489,6 +489,28 @@ module otp::ueoption_test {
             object::is_owner(created_option_object, ra_address),
             ETestExpectationFailure  // option token object owner by the resource account
         );
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
+
+    #[test(admin = @admin_address)]
+    // #[expected_failure(abort_code = 0x500, location = otp::ueoption)]
+    #[expected_failure(abort_code = 0x80001, location = std::object)]
+    fun test_underwrite_same_twice_failure(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+
+        let default_expiry_ms = 1000000;
+        ueoption::initialize(admin, default_expiry_ms);
+
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let issuer_address = @0xA;
+        let issuer = account::create_account_for_test(issuer_address);
+        coin::register<AptosCoin>(&issuer);
+
+        ueoption::underwrite(&issuer);
+        ueoption::underwrite(&issuer);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
