@@ -99,20 +99,20 @@ module otp::ueoption {
         );
     }
 
-    public entry fun underwrite(issuer: &signer) acquires Repository {
+    public entry fun underwrite(issuer: &signer, asset: vector<u8>, supply_amount: u64) acquires Repository {
         let ra_address = get_resource_account_address();
         let issuer_address = signer::address_of(issuer);
         assert!(
             coin::is_account_registered<AptosCoin>(issuer_address),
             EAccountHasNotRegisteredAptosCoin // AptosCoin is required to act as base coin for trading
         );
-        let repo = borrow_global_mut<Repository>(ra_address);
-        let expiry_ms = timestamp::now_microseconds() + repo.default_expiry_ms; // TODO: floor to start of the day
 
+        let repo = borrow_global_mut<Repository>(ra_address);
+        let expiry_ms = timestamp::now_microseconds() + repo.default_expiry_ms; // TODO: floor to start of the day, TODO: replace with argument, and checks for valid dates weekly, daily, monthly probably
         let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
         let bucket_key = get_day_bucket(expiry_ms);
         let option_name = create_option_object(
-            &ra_signer, issuer_address, expiry_ms
+            &ra_signer, asset, issuer_address, expiry_ms, supply_amount
         );
         if (simple_map::contains_key(&repo.options, &bucket_key)) {
             let expiry_bucket = simple_map::borrow_mut(&mut repo.options, &bucket_key);
@@ -154,7 +154,7 @@ module otp::ueoption {
     //     );
     // }
 
-    public entry fun buy(buyer: &signer, option_name: String) acquires Repository, ProtocolOption {
+    public entry fun buy(buyer: &signer, option_name: String, amount: u64) acquires Repository, ProtocolOption {
         let ra_address = get_resource_account_address();
         let repo = borrow_global_mut<Repository>(ra_address);
         let option_address = get_option_address_with_name(&option_name);
@@ -190,7 +190,7 @@ module otp::ueoption {
         primary_fungible_store::mint(
             &option_token.mint_ref,
             signer::address_of(buyer),
-            1
+            amount
         )
     }
     // public entry fun cancel() {}
@@ -272,8 +272,7 @@ module otp::ueoption {
         );
     }
 
-    fun create_option_object(creator: &signer, issuer_address: address, expiry_ms: u64): String {
-        let asset = b"BTC";
+    fun create_option_object(creator: &signer, asset: vector<u8>, issuer_address: address, expiry_ms: u64, supply_amount: u64): String {
         let token_name = string::utf8(derive_option_seed(string::utf8(asset), expiry_ms));
         let constructor_ref = token::create_named_token(
             creator,
@@ -322,7 +321,7 @@ module otp::ueoption {
 
         primary_fungible_store::create_primary_store_enabled_fungible_asset(
             &constructor_ref,
-            option::none(),
+            option::some((supply_amount as u128)),
             token_name,
             string::utf8(b"OTC"), // FIXME: need a system for options symbols, max length 10
             get_asset_decimals(asset),
@@ -391,6 +390,7 @@ module otp::ueoption {
 module otp::ueoption_test {
     use otp::ueoption::{Self, ProtocolOption};
 
+    use std::option;
     use std::signer;
     use std::timestamp;
     use std::string::{Self};
@@ -400,6 +400,7 @@ module otp::ueoption_test {
     use aptos_framework::account::{Self};
     use aptos_framework::aptos_coin::{Self, AptosCoin};
     use aptos_framework::coin::{BurnCapability, MintCapability};
+    use aptos_framework::fungible_asset;
     use aptos_framework::primary_fungible_store;
 
     use aptos_token_objects::token;
@@ -459,7 +460,7 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
 
-        ueoption::underwrite(&issuer);
+        ueoption::underwrite(&issuer, b"BTC", 1_000);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
@@ -489,6 +490,10 @@ module otp::ueoption_test {
             object::is_owner(created_option_object, ra_address),
             ETestExpectationFailure  // option token object owner by the resource account
         );
+        assert!(
+            fungible_asset::maximum(created_option_object) == option::some(1_000),
+            ETestExpectationFailure // no remaining supply left
+        );
 
         teardown_test_framework(burn_cap, mint_cap);
     }
@@ -509,14 +514,14 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
 
-        ueoption::underwrite(&issuer);
-        ueoption::underwrite(&issuer);
+        ueoption::underwrite(&issuer, b"BTC", 1);
+        ueoption::underwrite(&issuer, b"BTC", 1);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
 
     #[test(admin = @admin_address)]
-    fun test_buy_success(admin: &signer) {
+    fun test_buy_total_supply_success(admin: &signer) {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         let issuer_address = @0xA;
@@ -534,9 +539,9 @@ module otp::ueoption_test {
 
         let option_expiry_ms = 1000000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer);
+        ueoption::underwrite(&issuer, b"BTC", 1);
 
-        ueoption::buy(&buyer, string::utf8(b"BTC:11000000"));
+        ueoption::buy(&buyer, string::utf8(b"BTC:11000000"), 1);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
@@ -549,6 +554,15 @@ module otp::ueoption_test {
             primary_fungible_store::balance(buyer_address, created_option_object) == 1,
             ETestExpectationFailure
         );
+        debug::print(&fungible_asset::balance(created_option_object));
+        assert!(
+            fungible_asset::supply(created_option_object) == fungible_asset::maximum(created_option_object),
+            ETestExpectationFailure // no remaining supply left
+        );
+        assert!(
+            primary_fungible_store::balance(issuer_address, created_option_object) == 0,
+            ETestExpectationFailure // issuer does not own his options
+        );
         assert!(
             coin::balance<AptosCoin>(buyer_address) == 9,
             ETestExpectationFailure
@@ -560,6 +574,67 @@ module otp::ueoption_test {
 
         teardown_test_framework(burn_cap, mint_cap);
     }
+
+    #[test(admin = @admin_address)]
+    fun test_buy_total_share_success(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<AptosCoin>(&buyer);
+        aptos_coin::mint(&aptos_framework, buyer_address, 10);
+
+        timestamp::set_time_has_started_for_testing(&aptos_framework);
+
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let option_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, option_expiry_ms);
+        ueoption::underwrite(&issuer, b"BTC", 100);
+
+        ueoption::buy(&buyer, string::utf8(b"BTC:3000000"), 30);
+
+        let ra_address = ueoption::get_resource_account_address();
+        let expected_new_option_address = token::create_token_address(
+            &ra_address,
+            &string::utf8(b"OTP"),
+            &string::utf8(b"BTC:3000000")
+        );
+        let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
+        assert!(
+            primary_fungible_store::balance(buyer_address, created_option_object) == 30,
+            ETestExpectationFailure
+        );
+        assert!(
+            primary_fungible_store::balance(issuer_address, created_option_object) == 0,
+            ETestExpectationFailure
+        );
+        assert!(
+            fungible_asset::supply(created_option_object) == option::some(30),
+            ETestExpectationFailure // no remaining supply left
+        );
+        assert!(
+            fungible_asset::maximum(created_option_object) == option::some(100),
+            ETestExpectationFailure // no remaining supply left
+        );
+        assert!(
+            coin::balance<AptosCoin>(buyer_address) == 9,
+            ETestExpectationFailure
+        );
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 1,
+            ETestExpectationFailure
+        );
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
+
+    // #[test(admin = @admin_address)]
+    // fun test_buy_over_supply_failure(admin: &signer) {}
 
     #[test(aptos_framework = @aptos_framework)]
     fun test_get_asset_price_btc(aptos_framework: &signer) {
