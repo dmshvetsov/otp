@@ -120,7 +120,7 @@ module otp::ueoption {
         if (simple_map::contains_key(&repo.options, &bucket_key)) {
             let expiry_bucket = simple_map::borrow_mut(&mut repo.options, &bucket_key);
             let option_object = create_option_object(
-                &ra_signer, issuer_address, expiry_ms, vector::length(expiry_bucket) + 1
+                &ra_signer, issuer_address, expiry_ms
             );
             vector::push_back(
                 expiry_bucket,
@@ -131,7 +131,7 @@ module otp::ueoption {
             // object::transfer(&ra_signer, option_object, issuer_address);
         } else {
             let option_object = create_option_object(
-                &ra_signer, issuer_address, expiry_ms, 1
+                &ra_signer, issuer_address, expiry_ms
             );
             let new_expiry_bucket = vector::empty();
             vector::push_back(
@@ -259,12 +259,10 @@ module otp::ueoption {
     //= helper function
     //=
 
-    public(friend) fun derive_option_seed(asset: String, expiry_ms: u64, num: u64): vector<u8> {
+    public(friend) fun derive_option_seed(asset: String, expiry_ms: u64): vector<u8> {
         let s = copy asset;
         string::append(&mut s, string::utf8(b":"));
         string::append(&mut s, string_utils::to_string<u64>(&expiry_ms));
-        string::append(&mut s, string::utf8(b":"));
-        string::append(&mut s, string_utils::to_string<u64>(&num));
         *string::bytes(&s)
     }
 
@@ -289,9 +287,9 @@ module otp::ueoption {
         );
     }
 
-    fun create_option_object(creator: &signer, issuer_address: address, expiry_ms: u64, option_num: u64): Object<ProtocolOption> {
+    fun create_option_object(creator: &signer, issuer_address: address, expiry_ms: u64): Object<ProtocolOption> {
         let asset = b"BTC";
-        let token_name = string::utf8(derive_option_seed(string::utf8(asset), expiry_ms, option_num));
+        let token_name = string::utf8(derive_option_seed(string::utf8(asset), expiry_ms));
         let constructor_ref = token::create_named_token(
             creator,
             string::utf8(COLLECTION_NAME),
@@ -365,8 +363,8 @@ module otp::ueoption {
     //= getters
     //=
 
-    fun option_address(expiry_ms: u64, option_num: u64) {
-        let token_name = derive_option_seed(string::utf8(b"BTC"), expiry_ms, option_num);
+    fun option_address(expiry_ms: u64) {
+        let token_name = derive_option_seed(string::utf8(b"BTC"), expiry_ms);
         let ra_address = get_resource_account_address();
         token::create_token_address(
             &ra_address, // FIXME could be wron, and address need to be gen from capability
@@ -445,15 +443,15 @@ module otp::ueoption_test {
     #[test()]
     fun test_derive_option_seed() {
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"BTC"), 1, 1) == b"BTC:1:1",
+            ueoption::derive_option_seed(string::utf8(b"BTC"), 1) == b"BTC:1",
             0
         );
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"BTC"), 10, 111) == b"BTC:10:111",
+            ueoption::derive_option_seed(string::utf8(b"BTC"), 10) == b"BTC:10",
             0
         );
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"BTC"), 1230001000200030004, 235) == b"BTC:1230001000200030004:235",
+            ueoption::derive_option_seed(string::utf8(b"BTC"), 1230001000200030004) == b"BTC:1230001000200030004",
             0
         );
     }
@@ -478,7 +476,7 @@ module otp::ueoption_test {
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"BTC:10000100:1")
+            &string::utf8(b"BTC:10000100")
         );
 
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
@@ -531,7 +529,7 @@ module otp::ueoption_test {
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"BTC:11000000:1")
+            &string::utf8(b"BTC:11000000")
         );
         ueoption::buy(&buyer, expected_new_option_address);
 
