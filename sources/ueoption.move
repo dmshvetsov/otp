@@ -201,24 +201,7 @@ module otp::ueoption {
         );
         coin::transfer<AptosCoin>(buyer, option_issuer_address, option_premium);
 
-        // TODO change to fungible asset transfer
-        // let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
-        // object::transfer(
-        //     &ra_signer,
-        //     option_object,
-        //     signer::address_of(buyer)
-        // );
-        // let option_token = borrow_global<ProtocolOption>(option_address);
-        // let option_metadata = object::address_to_object<Metadata>(option_address);
-        // let option_object = object::address_to_object<ProtocolOption>(option_address);
-        // primary_fungible_store::transfer(
-        //     option_issuer_address, // from
-        //     &option_address,
-        //     signer::address_of(buyer), // to
-        //     1 // amount
-        // );
         let option_token = borrow_global<ProtocolOption>(option_address);
-        // let option_object = object::address_to_object<ProtocolOption>(option_address);
         primary_fungible_store::mint(
             &option_token.mint_ref,
             signer::address_of(buyer),
@@ -273,7 +256,7 @@ module otp::ueoption {
     }
 
     //=
-    //= logic helper function
+    //= helper function
     //=
 
     public(friend) fun derive_option_seed(asset: String, expiry_ms: u64, num: u64): vector<u8> {
@@ -307,17 +290,8 @@ module otp::ueoption {
     }
 
     fun create_option_object(creator: &signer, issuer_address: address, expiry_ms: u64, option_num: u64): Object<ProtocolOption> {
-        // let transfer_ref = object::generate_transfer_ref(&token_constructor_ref);
-        // object::transfer_with_ref(
-        //     object::generate_linear_transfer_ref(&transfer_ref),
-        //     adopter_address,
-        // );
         let asset = b"BTC";
         let token_name = string::utf8(derive_option_seed(string::utf8(asset), expiry_ms, option_num));
-        // let constructor_ref = object::create_named_object(
-        //     creator,
-        //     seed
-        // );
         let constructor_ref = token::create_named_token(
             creator,
             string::utf8(COLLECTION_NAME),
@@ -328,7 +302,6 @@ module otp::ueoption {
         );
         let object_signer = object::generate_signer(&constructor_ref);
 
-        // FIXME decide what to use struct props, or wallet friendly property map
         let property_mutator_ref = property_map::generate_mutator_ref(&constructor_ref);
 
         let properties = property_map::prepare_input(vector[], vector[], vector[]);
@@ -402,39 +375,11 @@ module otp::ueoption {
         );
     }
 
-    public(friend) fun get_option_owned_amount(owner_address: address, option_address: address): u64 {
-        let option_object = object::address_to_object<ProtocolOption>(option_address);
-        let metadata = object::convert<ProtocolOption, Metadata>(option_object);
-        let store = primary_fungible_store::ensure_primary_store_exists(owner_address, metadata);
-        fungible_asset::balance(store)
-    }
-
-    // public(friend) fun get_option_strike(object_address: address): u64 acquires ProtocolOption {
-    //     borrow_global<ProtocolOption>(object_address).strike
-    // }
-    //
-    // public(friend) fun get_option_premium(object_address: address): u64 acquires ProtocolOption {
-    //     borrow_global<ProtocolOption>(object_address).premium
-    // }
-    //
-    // public(friend) fun get_option_expiry_ms(object_address: address): u64 acquires ProtocolOption {
-    //     borrow_global<ProtocolOption>(object_address).expiry_ms
-    // }
-    //
-    // public(friend) fun get_option_issuer_address(object_address: address): address acquires ProtocolOption {
-    //     borrow_global<ProtocolOption>(object_address).issuer_address
-    // }
-
-    //= checks
-
-    // public(friend) fun is_option_state_initialized(object_address: address): bool acquires ProtocolOption {
-    //     // option.state == OPTION_STATE_INITIALIZED
-    //     borrow_global<ProtocolOption>(object_address).state == OPTION_STATE_INITIALIZED
-    // }
-
-    // public(friend) fun is_option_owner(object_address: address, address: address): bool {
-    //     let option_object = object::address_to_object<ProtocolOption>(object_address);
-    //     object::is_owner<ProtocolOption>(option_object, address)
+    // public(friend) fun get_option_owned_amount(owner_address: address, option_address: address): u64 {
+    //     let option_object = object::address_to_object<ProtocolOption>(option_address);
+    //     let metadata = object::convert<ProtocolOption, Metadata>(option_object);
+    //     let store = primary_fungible_store::ensure_primary_store_exists(owner_address, metadata);
+    //     fungible_asset::balance(store)
     // }
 
     //=
@@ -637,8 +582,6 @@ module otp::ueoption_test {
                 price_info::new(
                     timestamp::now_seconds() - 1, 
                     timestamp::now_seconds() - 2, 
-                    // 1693821648,
-                    // 1693821650,
                     price_feed::new(
                         price_identifier::from_byte_vec(x"f9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b"),
                         price::new(
