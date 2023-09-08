@@ -1,2 +1,2 @@
 test:
-    aptos move test --dev --ignore-compile-warnings
+	aptos move test --dev --ignore-compile-warnings
