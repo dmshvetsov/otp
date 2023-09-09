@@ -33,7 +33,10 @@ module otp::ueoption {
      */
 
     // available assets
+    /// Wormhole Wrapped Bitcoin from Ethereum
+    /// https://aptoscan.com/coin/0xae478ff7d83ed072dbc5e264250e67ef58f57c99d89b447efd8a0a2e8b2be76e::coin::T
     const ASSET_WBTC: vector<u8> = b"WBTC";
+    /// Native Aptos coin
     const ASSET_APT: vector<u8> = b"APT";
 
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
@@ -63,10 +66,10 @@ module otp::ueoption {
     const ENotAdmin: u64 = 0;
     const EUnsupportedAsset: u64 = 1;
     const EOptionNotFound: u64 = 2;
-    const EAccountHasNotRegisteredAptosCoin: u64 = 3;
     const EOptionDuplicate: u64 = 500;
     const EOptionNotEnougSupply: u64 = 501;
     const EInternalError: u64 = 1000;
+    const ENotImplemented: u64 = 1001;
 
     /**
      *  structs
@@ -98,6 +101,10 @@ module otp::ueoption {
 
         let (ra, signer_cap) = account::create_resource_account(admin, RA_SEED);
         create_collection(&ra);
+
+        // register coins for all supported assets
+        coin::register<AptosCoin>(&ra);
+
         move_to(
             &ra,
             Repository {
@@ -116,17 +123,14 @@ module otp::ueoption {
         multiplier: u64,
         premium: u64
     ) acquires Repository {
-        let ra_address = get_resource_account_address();
-        let issuer_address = signer::address_of(issuer);
-        assert!(
-            coin::is_account_registered<AptosCoin>(issuer_address),
-            EAccountHasNotRegisteredAptosCoin // AptosCoin is required to act as base coin for trading
-        );
+        colaterize_asset(issuer, asset, supply_amount);
 
+        let ra_address = get_resource_account_address();
         let repo = borrow_global_mut<Repository>(ra_address);
         let expiry_ms = timestamp::now_microseconds() + repo.default_expiry_ms; // TODO: floor to start of the day, TODO: replace with argument, and checks for valid dates weekly, daily, monthly probably
         let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
         let bucket_key = get_day_bucket(expiry_ms);
+        let issuer_address = signer::address_of(issuer);
         let option_name = create_option_object(
             &ra_signer, asset, issuer_address, repo.sell_fee, expiry_ms, supply_amount, multiplier, premium
         );
@@ -355,6 +359,22 @@ module otp::ueoption {
 
         token_name
     }
+    
+    fun colaterize_asset(asset_owner: &signer, asset: vector<u8>, amount: u64) {
+        let ra_address = get_resource_account_address();
+        if (asset == ASSET_WBTC) {
+            abort ENotImplemented
+        } else if (asset == ASSET_APT) {
+            coin::transfer<AptosCoin>(
+                asset_owner,
+                ra_address,
+                amount
+            );
+            return
+        };
+
+        abort EUnsupportedAsset // can't colaterize unsupported asset
+    }
 
     //=
     //= getters
@@ -483,7 +503,7 @@ module otp::ueoption_test {
 
     #[test(admin = @admin_address)]
     fun test_underwrite_success(admin: &signer) {
-        let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         let default_expiry_ms = 100;
         ueoption::initialize(admin, default_expiry_ms);
@@ -494,14 +514,15 @@ module otp::ueoption_test {
         let issuer_address = @0xA;
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 1_200);
 
-        ueoption::underwrite(&issuer, b"WBTC", 1_000, 100, 250);
+        ueoption::underwrite(&issuer, b"APT", 1_000, 100, 250);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"WBTC:10000100")
+            &string::utf8(b"APT:10000100")
         );
 
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
@@ -531,7 +552,15 @@ module otp::ueoption_test {
         );
         assert!(
             fungible_asset::maximum(created_option_object) == option::some(1_000),
-            ETestExpectationFailure // no remaining supply left
+            ETestExpectationFailure // max supply is 1000
+        );
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 200,
+            ETestExpectationFailure // 1000 options with 1 to 1 colaterization * 1 APT - issuer balance 1200 APT = 200 APT
+        );
+        assert!(
+            coin::balance<AptosCoin>(ra_address) == 1000,
+            ETestExpectationFailure // resource account initial balane 0 + colaterized deposit 1000 APT = 1000 APT
         );
 
         teardown_test_framework(burn_cap, mint_cap);
@@ -541,7 +570,7 @@ module otp::ueoption_test {
     // #[expected_failure(abort_code = 0x500, location = otp::ueoption)]
     #[expected_failure(abort_code = 0x80001, location = std::object)]
     fun test_underwrite_same_twice_failure(admin: &signer) {
-        let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
         let default_expiry_ms = 1000000;
         ueoption::initialize(admin, default_expiry_ms);
@@ -552,9 +581,10 @@ module otp::ueoption_test {
         let issuer_address = @0xA;
         let issuer = account::create_account_for_test(issuer_address);
         coin::register<AptosCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 5);
 
-        ueoption::underwrite(&issuer, b"WBTC", 1, 1, 1);
-        ueoption::underwrite(&issuer, b"WBTC", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
@@ -568,25 +598,24 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         let buyer = account::create_account_for_test(buyer_address);
         coin::register<AptosCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 2);
         coin::register<AptosCoin>(&buyer);
         aptos_coin::mint(&aptos_framework, buyer_address, 10);
-
-        timestamp::set_time_has_started_for_testing(&aptos_framework);
 
         let now = 10;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 1000000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"WBTC", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
 
-        ueoption::buy(&buyer, string::utf8(b"WBTC:11000000"), 1);
+        ueoption::buy(&buyer, string::utf8(b"APT:11000000"), 1);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"WBTC:11000000")
+            &string::utf8(b"APT:11000000")
         );
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -603,11 +632,11 @@ module otp::ueoption_test {
         );
         assert!(
             coin::balance<AptosCoin>(buyer_address) == 9,
-            ETestExpectationFailure
+            ETestExpectationFailure // buyer initial balance 10 APT - option premium 1 APT = 9 APT
         );
         assert!(
-            coin::balance<AptosCoin>(issuer_address) == 1,
-            ETestExpectationFailure
+            coin::balance<AptosCoin>(issuer_address) == 2,
+            ETestExpectationFailure // issuer initial balance 2 APT - colaterized asset for 1 option 1 APT + premium 1 APT = 2
         );
 
         teardown_test_framework(burn_cap, mint_cap);
@@ -622,25 +651,24 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         let buyer = account::create_account_for_test(buyer_address);
         coin::register<AptosCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
         coin::register<AptosCoin>(&buyer);
         aptos_coin::mint(&aptos_framework, buyer_address, 10);
-
-        timestamp::set_time_has_started_for_testing(&aptos_framework);
 
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"WBTC", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
 
-        ueoption::buy(&buyer, string::utf8(b"WBTC:3000000"), 3);
+        ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 3);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"WBTC:3000000")
+            &string::utf8(b"APT:3000000")
         );
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -664,8 +692,9 @@ module otp::ueoption_test {
             ETestExpectationFailure // owned - 3 option tokens (contracts) * 2 cost per contract = 4
         );
         assert!(
-            coin::balance<AptosCoin>(issuer_address) == 6,
-            ETestExpectationFailure // 3 option tokens (contracts) * 2 cost per contract = 6
+            coin::balance<AptosCoin>(issuer_address) == 26,
+            ETestExpectationFailure // issuer intial balance 120 APT - 100 option * 1 APT + 3 option tokens (contracts) * 2 APT premium per contract = 26 APT
+            // ETestExpectationFailure // 3 option tokens (contracts) * 2 cost per contract = 6
         );
 
         teardown_test_framework(burn_cap, mint_cap);
@@ -682,19 +711,18 @@ module otp::ueoption_test {
         let issuer = account::create_account_for_test(issuer_address);
         let buyer = account::create_account_for_test(buyer_address);
         coin::register<AptosCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
         coin::register<AptosCoin>(&buyer);
         aptos_coin::mint(&aptos_framework, buyer_address, 150);
-
-        timestamp::set_time_has_started_for_testing(&aptos_framework);
 
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"WBTC", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
 
-        ueoption::buy(&buyer, string::utf8(b"WBTC:3000000"), 11);
+        ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 11);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
@@ -712,16 +740,14 @@ module otp::ueoption_test {
         coin::register<AptosCoin>(&buyer);
         aptos_coin::mint(&aptos_framework, buyer_address, 1);
 
-        timestamp::set_time_has_started_for_testing(&aptos_framework);
-
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
-        ueoption::underwrite(&issuer, b"WBTC", 10, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 10, 1, 1);
 
-        ueoption::buy(&buyer, string::utf8(b"WBTC:3000000"), 2);
+        ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 2);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
