@@ -123,7 +123,7 @@ module otp::ueoption {
         multiplier: u64,
         premium: u64
     ) acquires Repository {
-        colaterize_asset(issuer, asset, supply_amount);
+        collaterize_asset(issuer, asset, supply_amount);
 
         let ra_address = get_resource_account_address();
         let repo = borrow_global_mut<Repository>(ra_address);
@@ -360,7 +360,7 @@ module otp::ueoption {
         token_name
     }
     
-    fun colaterize_asset(asset_owner: &signer, asset: vector<u8>, amount: u64) {
+    fun collaterize_asset(asset_owner: &signer, asset: vector<u8>, amount: u64) {
         let ra_address = get_resource_account_address();
         if (asset == ASSET_WBTC) {
             abort ENotImplemented
@@ -373,7 +373,7 @@ module otp::ueoption {
             return
         };
 
-        abort EUnsupportedAsset // can't colaterize unsupported asset
+        abort EUnsupportedAsset // can't collaterize unsupported asset
     }
 
     //=
@@ -556,11 +556,11 @@ module otp::ueoption_test {
         );
         assert!(
             coin::balance<AptosCoin>(issuer_address) == 200,
-            ETestExpectationFailure // 1000 options with 1 to 1 colaterization * 1 APT - issuer balance 1200 APT = 200 APT
+            ETestExpectationFailure // 1000 options with 1 to 1 collaterization * 1 APT - issuer balance 1200 APT = 200 APT
         );
         assert!(
             coin::balance<AptosCoin>(ra_address) == 1000,
-            ETestExpectationFailure // resource account initial balane 0 + colaterized deposit 1000 APT = 1000 APT
+            ETestExpectationFailure // resource account initial balane 0 + collaterized deposit 1000 APT = 1000 APT
         );
 
         teardown_test_framework(burn_cap, mint_cap);
@@ -636,7 +636,7 @@ module otp::ueoption_test {
         );
         assert!(
             coin::balance<AptosCoin>(issuer_address) == 2,
-            ETestExpectationFailure // issuer initial balance 2 APT - colaterized asset for 1 option 1 APT + premium 1 APT = 2
+            ETestExpectationFailure // issuer initial balance 2 APT - collaterized asset for 1 option 1 APT + premium 1 APT = 2
         );
 
         teardown_test_framework(burn_cap, mint_cap);
