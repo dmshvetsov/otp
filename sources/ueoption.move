@@ -244,7 +244,7 @@ module otp::ueoption {
     //= helper function
     //=
 
-    public(friend) fun derive_option_seed(asset: String, expiry_ms: u64): vector<u8> {
+    public(friend) fun derive_option_name(asset: String, expiry_ms: u64): vector<u8> {
         let s = copy asset;
         string::append(&mut s, string::utf8(b":"));
         string::append(&mut s, string_utils::to_string<u64>(&expiry_ms));
@@ -282,7 +282,7 @@ module otp::ueoption {
         multiplier: u64,
         premium: u64
     ): String {
-        let token_name = string::utf8(derive_option_seed(string::utf8(asset), expiry_ms));
+        let token_name = string::utf8(derive_option_name(string::utf8(asset), expiry_ms));
         let royalty = if (royalty > 0) {
             let ra_address = get_resource_account_address();
             option::some(
@@ -390,7 +390,7 @@ module otp::ueoption {
     }
 
     fun get_option_address_with_asset_expiry(asset: vector<u8>, expiry_ms: u64): address {
-        let token_name = derive_option_seed(string::utf8(asset), expiry_ms);
+        let token_name = derive_option_name(string::utf8(asset), expiry_ms);
         get_option_address_with_name(&string::utf8(token_name))
     }
 
@@ -486,17 +486,17 @@ module otp::ueoption_test {
     }
 
     #[test()]
-    fun test_derive_option_seed() {
+    fun test_derive_option_name() {
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"WBTC"), 1) == b"WBTC:1",
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 1) == b"WBTC:1",
             0
         );
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"WBTC"), 10) == b"WBTC:10",
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 10) == b"WBTC:10",
             0
         );
         assert!(
-            ueoption::derive_option_seed(string::utf8(b"WBTC"), 1230001000200030004) == b"WBTC:1230001000200030004",
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 1230001000200030004) == b"WBTC:1230001000200030004",
             0
         );
     }
