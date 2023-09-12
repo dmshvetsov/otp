@@ -7,6 +7,7 @@ module otp::ueoption {
 
     use aptos_std::simple_map::{Self, SimpleMap};
     use aptos_std::vector;
+    use aptos_std::math64;
     use aptos_std::string_utils;
 
     use aptos_framework::coin;
@@ -20,11 +21,13 @@ module otp::ueoption {
     use aptos_token_objects::royalty;
     use aptos_token_objects::collection;
     use aptos_token_objects::property_map;
-
+    
+    use otp::date;
+    
     use pyth::pyth;
     use pyth::price::Price;
     use pyth::price_identifier;
-
+    
     #[test_only]
     friend otp::ueoption_test;
 
@@ -33,13 +36,18 @@ module otp::ueoption {
      */
 
     // available assets
-    /// Wormhole Wrapped Bitcoin from Ethereum
+    // all (bases) assets have USD quote currency
+    /// Wormhole Wrapped Bitcoin from Ethereum WBTC/USD
     /// https://aptoscan.com/coin/0xae478ff7d83ed072dbc5e264250e67ef58f57c99d89b447efd8a0a2e8b2be76e::coin::T
     const ASSET_WBTC: vector<u8> = b"WBTC";
-    /// Native Aptos coin
+    /// Native Aptos coin, APT/USD
     const ASSET_APT: vector<u8> = b"APT";
 
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
+    
+    // Option types
+    const OPTION_CALL: u8 = 1;
+    const OPTION_PUT: u8 = 2;
 
     // Option states
     const OPTION_STATE_CANCELED: u8 = 0;
@@ -208,8 +216,10 @@ module otp::ueoption {
         // pyth::update_price_feeds(pyth_update_data, coins);
 
         let asset_id = if (asset == ASSET_WBTC) {
+            // WBTC(ethereum)/USD
             x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed"
         } else if (asset == ASSET_APT) {
+            // APT/USD
             x"44a93dddd8effa54ea51076c4e851b6cbbfd938e82eb90197de38fe8876bb66e"
         } else {
             x"00"
@@ -244,10 +254,76 @@ module otp::ueoption {
     //= helper function
     //=
 
-    public(friend) fun derive_option_name(asset: String, expiry_ms: u64): vector<u8> {
+    /// format for call QUOTE_BASE-YYYYMMDD-C-[#k][###|0][u###]
+    /// format for put QUOTE_BASE-YYYYMMDD-P-[#k][###|0][u###]
+    /// max token name length in Aptos is 128 bytes string
+    /// see test for examples
+    public(friend) fun derive_option_name(asset: String, expiry_ms: u64, call_or_put: u8, price: u64, expo: u64): vector<u8> {
         let s = copy asset;
-        string::append(&mut s, string::utf8(b":"));
-        string::append(&mut s, string_utils::to_string<u64>(&expiry_ms));
+        string::append(&mut s, string::utf8(b"_USD"));
+        string::append(&mut s, string::utf8(b"-"));
+
+        let (year, month, day) = date::timestamp_to_date(expiry_ms);
+        string::append(&mut s, string_utils::to_string<u64>(&year));
+        if (month < 10) {
+            string::append(&mut s, string::utf8(b"0"));
+            string::append(&mut s, string_utils::to_string<u64>(&month));
+        } else {
+            string::append(&mut s, string_utils::to_string<u64>(&month));
+        };
+        if (day < 10) {
+            string::append(&mut s, string::utf8(b"0"));
+            string::append(&mut s, string_utils::to_string<u64>(&day));
+        } else {
+            string::append(&mut s, string_utils::to_string<u64>(&day));
+        };
+
+        if (call_or_put == 1) {
+            string::append(&mut s, string::utf8(b"-C-"));
+        } else if (call_or_put == 2) {
+            string::append(&mut s, string::utf8(b"-P-"));
+        } else {
+            abort EInternalError
+        };
+
+        let thouthands = price / math64::pow(10, expo + 3);
+        let unit = (price / math64::pow(10, expo)) % 1000;
+        let decimals = if (expo > 4) {
+            (price % math64::pow(10, expo)) / math64::pow(10, expo - 4)
+        } else {
+            price % math64::pow(10, expo)
+            
+        };
+        if (thouthands > 0) {
+            string::append(&mut s, string_utils::to_string<u64>(&thouthands));
+            string::append(&mut s, string::utf8(b"K"));
+            string::append(&mut s, string_utils::to_string<u64>(&unit));
+        } else if (unit > 0) {
+            string::append(&mut s, string_utils::to_string<u64>(&unit));
+            string::append(&mut s, string::utf8(b"U"));
+            if (decimals < 10) {
+                string::append(&mut s, string::utf8(b"000"));
+            } else if (decimals < 100) {
+                string::append(&mut s, string::utf8(b"00"));
+            } else if (decimals < 1000) {
+                string::append(&mut s, string::utf8(b"0"));
+            };
+            string::append(&mut s, string_utils::to_string<u64>(&decimals));
+        } else if (decimals > 0) {
+            if (decimals < 10) {
+                string::append(&mut s, string::utf8(b"0U000"));
+            } else if (decimals < 100) {
+                string::append(&mut s, string::utf8(b"0U00"));
+            } else if (decimals < 1000) {
+                string::append(&mut s, string::utf8(b"0U0"));
+            } else {
+                string::append(&mut s, string::utf8(b"0U"));
+            };
+            string::append(&mut s, string_utils::to_string<u64>(&decimals));
+        } else {
+            abort EInternalError
+        };
+
         *string::bytes(&s)
     }
 
@@ -282,7 +358,9 @@ module otp::ueoption {
         multiplier: u64,
         premium: u64
     ): String {
-        let token_name = string::utf8(derive_option_name(string::utf8(asset), expiry_ms));
+        let token_name = string::utf8(
+            derive_option_name(string::utf8(asset), expiry_ms, OPTION_CALL, 1_000, 3) // FIMXME get strike price
+        );
         let royalty = if (royalty > 0) {
             let ra_address = get_resource_account_address();
             option::some(
@@ -390,7 +468,7 @@ module otp::ueoption {
     }
 
     fun get_option_address_with_asset_expiry(asset: vector<u8>, expiry_ms: u64): address {
-        let token_name = derive_option_name(string::utf8(asset), expiry_ms);
+        let token_name = derive_option_name(string::utf8(asset), expiry_ms, OPTION_CALL, 1_000, 3); // FIXME get strike price
         get_option_address_with_name(&string::utf8(token_name))
     }
 
@@ -487,16 +565,77 @@ module otp::ueoption_test {
 
     #[test()]
     fun test_derive_option_name() {
+        let call = 1;
+        let put = 2;
+        let eight_decimals = 8;
+
         assert!(
-            ueoption::derive_option_name(string::utf8(b"WBTC"), 1) == b"WBTC:1",
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 1, call, 2580000000000, eight_decimals) == b"WBTC_USD-19700101-C-25K800",
             0
         );
         assert!(
-            ueoption::derive_option_name(string::utf8(b"WBTC"), 10) == b"WBTC:10",
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 1, put, 2580000000000, eight_decimals) == b"WBTC_USD-19700101-P-25K800",
             0
         );
         assert!(
-            ueoption::derive_option_name(string::utf8(b"WBTC"), 1230001000200030004) == b"WBTC:1230001000200030004",
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 1, put, 2580000000000, eight_decimals) == b"WBTC_USD-19700101-P-25K800",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"WBTC"), 1, put, 25800000, 3) == b"WBTC_USD-19700101-P-25K800",
+            0
+        );
+
+        let date_11_aug_2023 = 1691712000;
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"WBTC"), date_11_aug_2023, call, 2610000000000, eight_decimals) == b"WBTC_USD-20230811-C-26K100",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"APT"), date_11_aug_2023, put, 550000000, eight_decimals) == b"APT_USD-20230811-P-5U5000",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"APT"), date_11_aug_2023, put, 500000000, eight_decimals) == b"APT_USD-20230811-P-5U0000",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, put, 500010000, eight_decimals) == b"XYZ_USD-20230811-P-5U0001",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, call, 180060000000, eight_decimals) == b"XYZ_USD-20230811-C-1K800",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, call, 10000000, eight_decimals) == b"XYZ_USD-20230811-C-0U1000",
+            0
+        );
+
+        let four_decimals = 4;
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, put, 50000, four_decimals) == b"XYZ_USD-20230811-P-5U0000",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, call, 1, four_decimals) == b"XYZ_USD-20230811-C-0U0001",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, call, 10, four_decimals) == b"XYZ_USD-20230811-C-0U0010",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, call, 100, four_decimals) == b"XYZ_USD-20230811-C-0U0100",
+            0
+        );
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), date_11_aug_2023, call, 1000, four_decimals) == b"XYZ_USD-20230811-C-0U1000",
+            0
+        );
+
+        assert!(
+            ueoption::derive_option_name(string::utf8(b"XYZ"), 1, call, 100, 0) == b"XYZ_USD-19700101-C-100U0000",
             0
         );
     }
@@ -522,7 +661,7 @@ module otp::ueoption_test {
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"APT:10000100")
+            &string::utf8(b"APT_USD-19700426-C-1U0000")
         );
 
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
@@ -609,13 +748,13 @@ module otp::ueoption_test {
         ueoption::initialize(admin, option_expiry_ms);
         ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
 
-        ueoption::buy(&buyer, string::utf8(b"APT:11000000"), 1);
+        ueoption::buy(&buyer, string::utf8(b"APT_USD-19700508-C-1U0000"), 1);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"APT:11000000")
+            &string::utf8(b"APT_USD-19700508-C-1U0000")
         );
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -662,13 +801,13 @@ module otp::ueoption_test {
         ueoption::initialize(admin, option_expiry_ms);
         ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
 
-        ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 3);
+        ueoption::buy(&buyer, string::utf8(b"APT_USD-19700204-C-1U0000"), 3);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
             &ra_address,
             &string::utf8(b"OTP"),
-            &string::utf8(b"APT:3000000")
+            &string::utf8(b"APT_USD-19700204-C-1U0000")
         );
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
         assert!(
@@ -722,7 +861,7 @@ module otp::ueoption_test {
         ueoption::initialize(admin, option_expiry_ms);
         ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
 
-        ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 11);
+        ueoption::buy(&buyer, string::utf8(b"APT_USD-19700204-C-1U0000"), 11);
 
         teardown_test_framework(burn_cap, mint_cap);
     }

@@ -13,6 +13,29 @@ MVP
 - [ ] scheduled option settlement at expiry
 - [ ] underwrite a PUT option with collateral
 
+## option symbol convention
+
+Based on Options Clearing Corporation (OCC) Option Symbology Initiative (OSI) but taking into account the proposed format limits:
+
+- OSI quote currency is implicitly USD, in cryptocurrency space we need to be open for the future where USDC, USDT, BTC can be quote currencies
+- OSI max quote values for the option asset is 99999 in quote currency, that means BTC above 100k is not supported
+- OSI year format is expressed with 2 numbers, which make it impossible to express options of year 2100 and beyond
+- OSI base asset cannot be expressed with numbers
+
+Proposed symbology
+
+<TICKER, all uppercase>-YYYYMMDD-<C|P>-<#K###|###U####>
+
+examples:
+- BTC_USD-20220811-C-26K1000
+- BTC_USD-20220811-P-25K3500
+- BTC_USDC-20220811-P-25K3500
+- BTC_RNBC-20220811-P-184K8000
+- APT_USD-20220811-C-6U0000
+- APT_USD-20220811-P-4U9000
+
+For more info about OSI, search for "OPTIONS SYMBOLOGY INITIATIVE IMPLEMENTATION" by OCC at feb 3, 2010.
+
 ## unix timestamp to date conversion algo
 
 - https://stackoverflow.com/a/32158604/6317812
