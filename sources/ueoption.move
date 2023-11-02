@@ -1,4 +1,4 @@
-// TODO rename to remove the ue suffix 
+// TODO rename to remove the ue suffix
 module otp::ueoption {
     use std::signer;
     use std::timestamp;
@@ -16,18 +16,19 @@ module otp::ueoption {
     use aptos_framework::aptos_coin::{AptosCoin};
     use aptos_framework::primary_fungible_store;
     use aptos_framework::fungible_asset;
+    use aptos_framework::managed_coin;
 
     use aptos_token_objects::token;
     use aptos_token_objects::royalty;
     use aptos_token_objects::collection;
     use aptos_token_objects::property_map;
-    
+
     use otp::date;
-    
+
     use pyth::pyth;
     use pyth::price::Price;
     use pyth::price_identifier;
-    
+
     #[test_only]
     friend otp::ueoption_test;
 
@@ -44,7 +45,7 @@ module otp::ueoption {
     const ASSET_APT: vector<u8> = b"APT";
 
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
-    
+
     // Option types
     const OPTION_CALL: u8 = 1;
     const OPTION_PUT: u8 = 2;
@@ -88,7 +89,7 @@ module otp::ueoption {
         mint_ref: fungible_asset::MintRef,
         burn_ref: fungible_asset::BurnRef,
     }
-    
+
     struct Repository has key {
         /// list of active options
         /// SimpleMap<time bucket, start of the day UTC, vector of token names>
@@ -99,6 +100,13 @@ module otp::ueoption {
         sell_fee: u64,
         signer_cap: SignerCapability
     }
+    
+    //=
+    //= Temporary
+    //=
+    
+    // replace with USDC
+    struct UsdCoin has key {}
 
     //=
     //= entry function
@@ -112,6 +120,7 @@ module otp::ueoption {
 
         // register coins for all supported assets
         coin::register<AptosCoin>(&ra);
+        managed_coin::initialize<UsdCoin>(admin, b"UsdStubCoin", b"USD", 6, false);
 
         move_to(
             &ra,
@@ -188,7 +197,7 @@ module otp::ueoption {
             &string::utf8(OPTION_PROPERTY_ISSUER_ADDRESS_KEY)
         );
         let total_cost = option_premium * amount;
-        coin::transfer<AptosCoin>(buyer, option_issuer_address, total_cost);
+        coin::transfer<UsdCoin>(buyer, option_issuer_address, total_cost);
 
         let option_multiplier = property_map::read_u64(
             &option_object,
@@ -523,6 +532,7 @@ module otp::ueoption_test {
     use aptos_framework::coin::{BurnCapability, MintCapability};
     use aptos_framework::fungible_asset;
     use aptos_framework::primary_fungible_store;
+    use aptos_framework::managed_coin;
 
     use aptos_token_objects::token;
     use aptos_token_objects::property_map;
@@ -732,20 +742,22 @@ module otp::ueoption_test {
     fun test_buy_total_supply_success(admin: &signer) {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
-        let issuer_address = @0xA;
-        let buyer_address = @0xB;
-        let issuer = account::create_account_for_test(issuer_address);
-        let buyer = account::create_account_for_test(buyer_address);
-        coin::register<AptosCoin>(&issuer);
-        aptos_coin::mint(&aptos_framework, issuer_address, 2);
-        coin::register<AptosCoin>(&buyer);
-        aptos_coin::mint(&aptos_framework, buyer_address, 10);
-
         let now = 10;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 1000000;
         ueoption::initialize(admin, option_expiry_ms);
+
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 2);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
+
         ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
 
         ueoption::buy(&buyer, string::utf8(b"APT_USD-19700508-C-1U0000"), 1);
@@ -770,12 +782,16 @@ module otp::ueoption_test {
             ETestExpectationFailure // issuer does not own his options
         );
         assert!(
-            coin::balance<AptosCoin>(buyer_address) == 9,
-            ETestExpectationFailure // buyer initial balance 10 APT - option premium 1 APT = 9 APT
+            coin::balance<ueoption::UsdCoin>(buyer_address) == 9,
+            ETestExpectationFailure // buyer initial balance 10 USD - option premium 1 USD = 9 USD
         );
         assert!(
-            coin::balance<AptosCoin>(issuer_address) == 2,
-            ETestExpectationFailure // issuer initial balance 2 APT - collaterized asset for 1 option 1 APT + premium 1 APT = 2
+            coin::balance<AptosCoin>(issuer_address) == 1,
+            ETestExpectationFailure // issuer initial balance 2 APT - collaterized asset for 1 option 1 APT = 1 APT
+        );
+        assert!(
+            coin::balance<ueoption::UsdCoin>(issuer_address) == 1,
+            ETestExpectationFailure // 1 option + premium 1 USD = 1
         );
 
         teardown_test_framework(burn_cap, mint_cap);
@@ -785,20 +801,22 @@ module otp::ueoption_test {
     fun test_buy_total_share_success(admin: &signer) {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
-        let issuer_address = @0xA;
-        let buyer_address = @0xB;
-        let issuer = account::create_account_for_test(issuer_address);
-        let buyer = account::create_account_for_test(buyer_address);
-        coin::register<AptosCoin>(&issuer);
-        aptos_coin::mint(&aptos_framework, issuer_address, 120);
-        coin::register<AptosCoin>(&buyer);
-        aptos_coin::mint(&aptos_framework, buyer_address, 10);
-
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
+
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
+
         ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
 
         ueoption::buy(&buyer, string::utf8(b"APT_USD-19700204-C-1U0000"), 3);
@@ -827,13 +845,17 @@ module otp::ueoption_test {
             ETestExpectationFailure // maximum remains unchanged
         );
         assert!(
-            coin::balance<AptosCoin>(buyer_address) == 4,
+            coin::balance<ueoption::UsdCoin>(buyer_address) == 4,
             ETestExpectationFailure // owned - 3 option tokens (contracts) * 2 cost per contract = 4
         );
         assert!(
-            coin::balance<AptosCoin>(issuer_address) == 26,
-            ETestExpectationFailure // issuer intial balance 120 APT - 100 option * 1 APT + 3 option tokens (contracts) * 2 APT premium per contract = 26 APT
+            coin::balance<AptosCoin>(issuer_address) == 20,
+            ETestExpectationFailure // issuer intial balance 120 APT - 100 option * 1 APT  = 20 APT
             // ETestExpectationFailure // 3 option tokens (contracts) * 2 cost per contract = 6
+        );
+        assert!(
+            coin::balance<ueoption::UsdCoin>(issuer_address) == 6,
+            ETestExpectationFailure // 3 option tokens (option contracts) * 2 USD premium per contract = 26 APT
         );
 
         teardown_test_framework(burn_cap, mint_cap);
@@ -845,20 +867,22 @@ module otp::ueoption_test {
     fun test_buy_over_supply_failure(admin: &signer) {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
 
-        let issuer_address = @0xA;
-        let buyer_address = @0xB;
-        let issuer = account::create_account_for_test(issuer_address);
-        let buyer = account::create_account_for_test(buyer_address);
-        coin::register<AptosCoin>(&issuer);
-        aptos_coin::mint(&aptos_framework, issuer_address, 120);
-        coin::register<AptosCoin>(&buyer);
-        aptos_coin::mint(&aptos_framework, buyer_address, 150);
-
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
         let option_expiry_ms = 2_000_000;
         ueoption::initialize(admin, option_expiry_ms);
+
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 150);
+
         ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
 
         ueoption::buy(&buyer, string::utf8(b"APT_USD-19700204-C-1U0000"), 11);
