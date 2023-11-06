@@ -66,6 +66,8 @@ Option Intrinsic Value – the difference between the option's strike or exercis
 
 Option Time Value – represents the extra premium that traders and investors are willing to pay for the option based on its potential to make a profit before the option expires. Time value is influenced by factors such as the time remaining until expiration, the volatility of the underlying asset, interest rates, and dividends if applicable. Time value accounts for the risk or uncertainty associated with holding the option over time. 
 
+EMA Price (Feed) – exponentially-weighted moving average of the price. These values are time-weighted averages of the aggregate price and confidence. More details https://pythnetwork.medium.com/whats-in-a-name-302a03e6c3e1
+
 ## Optimization ideas
 
 - [x] do not mint option fungible token unit there is a buyer

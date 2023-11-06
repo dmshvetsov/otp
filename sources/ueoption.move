@@ -64,6 +64,7 @@ module otp::ueoption {
     const LE_TOKEN_URI: vector<u8> = b"FIXME";
     // option token properties
     const OPTION_PROPERTY_STATE_KEY: vector<u8> = b"state";
+    const OPTION_PROPERTY_STRIKE_KEY: vector<u8> = b"strike";
     const OPTION_PROPERTY_EXPIRY_MS_KEY: vector<u8> = b"expiry_ms";
     const OPTION_PROPERTY_PREMIUM_KEY: vector<u8> = b"premium";
     const OPTION_PROPERTY_ISSUER_ADDRESS_KEY: vector<u8> = b"issuer_address";
@@ -136,12 +137,15 @@ module otp::ueoption {
         );
     }
 
+    /// multiplier - option strike price in form of price * 100, e.g. strike 510 = 5.1
+    /// strike - option strike price in form of price * 100, e.g. strike 510 = 5.1
     public entry fun underwrite(
         issuer: &signer,
         asset: vector<u8>,
         supply_amount: u64,
         multiplier: u64,
-        premium: u64
+        premium: u64,
+        strike: u64
     ) acquires Repository {
         collaterize_asset(issuer, asset, supply_amount);
 
@@ -152,7 +156,7 @@ module otp::ueoption {
         let bucket_key = get_day_bucket(expiry_ms);
         let issuer_address = signer::address_of(issuer);
         let option_name = create_option_object(
-            &ra_signer, asset, issuer_address, repo.sell_fee, expiry_ms, supply_amount, multiplier, premium
+            &ra_signer, asset, issuer_address, repo.sell_fee, strike, expiry_ms, supply_amount, multiplier, premium
         );
         if (simple_map::contains_key(&repo.options, &bucket_key)) {
             let expiry_bucket = simple_map::borrow_mut(&mut repo.options, &bucket_key);
@@ -405,6 +409,7 @@ module otp::ueoption {
         asset: vector<u8>,
         issuer_address: address,
         royalty: u64,
+        strike: u64,
         expiry_ms: u64,
         total_supply_amount: u64,
         multiplier: u64,
@@ -437,8 +442,8 @@ module otp::ueoption {
         property_map::init(&constructor_ref, properties);
         property_map::add_typed(
             &property_mutator_ref,
-            string::utf8(b"strike"),
-            1
+            string::utf8(OPTION_PROPERTY_STRIKE_KEY),
+            strike
         );
         property_map::add_typed(
             &property_mutator_ref,
@@ -742,7 +747,7 @@ module otp::ueoption_test {
         coin::register<AptosCoin>(&issuer);
         aptos_coin::mint(&aptos_framework, issuer_address, 1_200);
 
-        ueoption::underwrite(&issuer, b"APT", 1_000, 100, 250);
+        ueoption::underwrite(&issuer, b"APT", 1_000, 100, 250, 510);
 
         let ra_address = ueoption::get_resource_account_address();
         let expected_new_option_address = token::create_token_address(
@@ -761,7 +766,7 @@ module otp::ueoption_test {
             ETestExpectationFailure 
         );
         assert!(
-            property_map::read_u64(&created_option_object, &string::utf8(b"strike")) == 1,
+            property_map::read_u64(&created_option_object, &string::utf8(b"strike")) == 510,
             ETestExpectationFailure 
         );
         assert!(
@@ -809,8 +814,8 @@ module otp::ueoption_test {
         coin::register<AptosCoin>(&issuer);
         aptos_coin::mint(&aptos_framework, issuer_address, 5);
 
-        ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
-        ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 1, 1, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 1, 1, 1, 1);
 
         teardown_test_framework(burn_cap, mint_cap);
     }
@@ -835,7 +840,7 @@ module otp::ueoption_test {
         coin::register<ueoption::UsdCoin>(&buyer);
         managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
 
-        ueoption::underwrite(&issuer, b"APT", 1, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 1, 1, 1, 1);
 
         ueoption::buy(&buyer, string::utf8(b"APT_USD-19700508-C-1U0000"), 1);
 
@@ -898,7 +903,7 @@ module otp::ueoption_test {
         coin::register<ueoption::UsdCoin>(&buyer);
         managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
 
-        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2, 1);
 
         ueoption::buy(&buyer, string::utf8(b"APT_USD-19700204-C-1U0000"), 3);
 
@@ -964,7 +969,7 @@ module otp::ueoption_test {
         coin::register<ueoption::UsdCoin>(&buyer);
         managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 150);
 
-        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2, 1);
 
         ueoption::buy(&buyer, string::utf8(b"APT_USD-19700204-C-1U0000"), 11);
 
@@ -989,7 +994,7 @@ module otp::ueoption_test {
 
         let options_expiry_ms = 2_000_000;
         ueoption::initialize(admin, options_expiry_ms);
-        ueoption::underwrite(&issuer, b"APT", 10, 1, 1);
+        ueoption::underwrite(&issuer, b"APT", 10, 1, 1, 1);
 
         ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 2);
 
@@ -1001,6 +1006,7 @@ module otp::ueoption_test {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
         let now = 1;
         timestamp::fast_forward_seconds(now);
+        setup_price_oracle();
 
         let options_expiry_ms = 2_000_000;
         ueoption::initialize(admin, options_expiry_ms);
@@ -1015,7 +1021,7 @@ module otp::ueoption_test {
         coin::register<ueoption::UsdCoin>(&buyer);
         managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
 
-        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2, 510);
         let option_name = string::utf8(b"APT_USD-19700204-C-1U0000"); 
 
         ueoption::buy(&buyer, option_name, 3);
@@ -1036,6 +1042,7 @@ module otp::ueoption_test {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
         let now = 1;
         timestamp::fast_forward_seconds(now);
+        setup_price_oracle();
 
         let options_expiry_ms = 2_000_000;
         ueoption::initialize(admin, options_expiry_ms);
@@ -1046,20 +1053,43 @@ module otp::ueoption_test {
         let buyer = account::create_account_for_test(buyer_address);
         coin::register<AptosCoin>(&issuer);
         coin::register<ueoption::UsdCoin>(&issuer);
-        aptos_coin::mint(&aptos_framework, issuer_address, 120);
+        aptos_coin::mint(&aptos_framework, issuer_address, 100);
         coin::register<ueoption::UsdCoin>(&buyer);
         managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
 
-        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2, 510);
         let option_name = string::utf8(b"APT_USD-19700204-C-1U0000"); 
 
         ueoption::buy(&buyer, option_name, 3);
         
         timestamp::fast_forward_seconds((options_expiry_ms / 1_000_000) + 1);
+        pyth_test::update_cache_for_test(
+            vector[
+                price_info::new(
+                    timestamp::now_seconds() - 1, 
+                    timestamp::now_seconds() - 2, 
+                    price_feed::new(
+                        price_identifier::from_byte_vec(APT_PRICE_ID),
+                        price::new(
+                            i64::new(490000000, false),
+                            0,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                        price::new(
+                            i64::new(490000000, false),
+                            0,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                    ),
+                ),
+            ]
+        );
 
         ueoption::settle(admin, option_name);
         assert!(
-            coin::balance<AptosCoin>(issuer_address) == 120,
+            coin::balance<AptosCoin>(issuer_address) == 100,
             ETestExpectationFailure // the option collateral is returned to the options issuer
         );
 
@@ -1072,6 +1102,7 @@ module otp::ueoption_test {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
         let now = 1;
         timestamp::fast_forward_seconds(now);
+        setup_price_oracle();
 
         let options_expiry_ms = 2_000_000;
         ueoption::initialize(admin, options_expiry_ms);
@@ -1086,7 +1117,7 @@ module otp::ueoption_test {
         coin::register<ueoption::UsdCoin>(&buyer);
         managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
 
-        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2, 510);
         let option_name = string::utf8(b"APT_USD-19700204-C-1U0000"); 
 
         ueoption::buy(&buyer, option_name, 3);
