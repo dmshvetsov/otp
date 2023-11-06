@@ -79,6 +79,7 @@ module otp::ueoption {
     const EOptionNotFound: u64 = 2;
     const EOptionDuplicate: u64 = 500;
     const EOptionNotEnougSupply: u64 = 501;
+    const EEuropeanOptionDoesNotExpire: u64 = 600;
     const EInternalError: u64 = 1000;
     const ENotImplemented: u64 = 1001;
 
@@ -222,6 +223,22 @@ module otp::ueoption {
         );
 
         let option_object = object::address_to_object<ProtocolOption>(option_address);
+        let option_expiry_ms = property_map::read_u64(
+            &option_object,
+            &string::utf8(OPTION_PROPERTY_EXPIRY_MS_KEY)
+        );
+        let ra_address = get_resource_account_address();
+        let repo = borrow_global<Repository>(ra_address);
+        let expiry_bucket = simple_map::borrow(&repo.options, &get_day_bucket(option_expiry_ms));
+        assert!(
+            vector::contains(expiry_bucket, &option_name),
+            EInternalError
+        );
+        assert!(
+            timestamp::now_microseconds() >= option_expiry_ms,
+            EEuropeanOptionDoesNotExpire
+        );
+
         let option_issuer_address = property_map::read_address(
             &option_object,
             &string::utf8(OPTION_PROPERTY_ISSUER_ADDRESS_KEY)
@@ -599,12 +616,11 @@ module otp::ueoption_test {
     use pyth::i64;
     use pyth::price;
     use pyth::pyth_test;
-    use aptos_std::debug;
 
     // FIXME: why it is required?
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
     
-    const ETestExpectationFailure: u64 = 0;
+    const ETestExpectationFailure: u64 = 100;
 
     #[test(admin = @admin_address)]
     fun test_initialize_success(admin: &signer) {
@@ -800,8 +816,8 @@ module otp::ueoption_test {
         let now = 10;
         timestamp::fast_forward_seconds(now);
 
-        let option_expiry_ms = 1000000;
-        ueoption::initialize(admin, option_expiry_ms);
+        let options_expiry_ms = 1000000;
+        ueoption::initialize(admin, options_expiry_ms);
 
         let issuer_address = @0xA;
         let buyer_address = @0xB;
@@ -863,8 +879,8 @@ module otp::ueoption_test {
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
-        let option_expiry_ms = 2_000_000;
-        ueoption::initialize(admin, option_expiry_ms);
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
 
         let issuer_address = @0xA;
         let buyer_address = @0xB;
@@ -929,8 +945,8 @@ module otp::ueoption_test {
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
-        let option_expiry_ms = 2_000_000;
-        ueoption::initialize(admin, option_expiry_ms);
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
 
         let issuer_address = @0xA;
         let buyer_address = @0xB;
@@ -965,8 +981,8 @@ module otp::ueoption_test {
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
-        let option_expiry_ms = 2_000_000;
-        ueoption::initialize(admin, option_expiry_ms);
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
         ueoption::underwrite(&issuer, b"APT", 10, 1, 1);
 
         ueoption::buy(&buyer, string::utf8(b"APT:3000000"), 2);
@@ -980,8 +996,8 @@ module otp::ueoption_test {
         let now = 1;
         timestamp::fast_forward_seconds(now);
 
-        let option_expiry_ms = 2_000_000;
-        ueoption::initialize(admin, option_expiry_ms);
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
         
         let issuer_address = @0xA;
         let buyer_address = @0xB;
@@ -998,20 +1014,48 @@ module otp::ueoption_test {
 
         ueoption::buy(&buyer, option_name, 3);
         
-        timestamp::fast_forward_seconds(option_expiry_ms + 1_000);
+        timestamp::fast_forward_seconds((options_expiry_ms / 1_000_000) + 1);
 
         ueoption::settle(admin, option_name);
         assert!(
             coin::balance<AptosCoin>(issuer_address) == 120,
-            ETestExpectationFailure // collateral is returned to the options issuer
+            ETestExpectationFailure // the option collateral is returned to the options issuer
         );
 
         teardown_test_framework(burn_cap, mint_cap);
     }
 
-    // #[test(admin = @admin_address)]
-    // fun test_settle_effective_option_failure(admin: &signer) {
-    // }
+    #[test(admin = @admin_address)]
+    #[expected_failure(abort_code = 600, location = otp::ueoption)]
+    fun test_settle_effective_option_failure(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
+        
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
+
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        let option_name = string::utf8(b"APT_USD-19700204-C-1U0000"); 
+
+        ueoption::buy(&buyer, option_name, 3);
+        
+        timestamp::fast_forward_seconds((options_expiry_ms / 1_000_000) - 1);
+
+        ueoption::settle(admin, option_name);
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
 
     #[test()]
     fun test_get_asset_price_wbtc() {
