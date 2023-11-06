@@ -10,8 +10,14 @@ MVP
 
 - [x] underwrite a CALL option with collateral
 - [x] ability to buy a share
-- [ ] scheduled option settlement at expiry
+- [ ] option settlement at expiry (european options)
+- [ ] scheduled worker to settle options
+- [ ] testnet launch
+
+Future
+
 - [ ] underwrite a PUT option with collateral
+- [ ] scheduled/automatic settlement
 
 ## option symbol convention
 
@@ -55,6 +61,10 @@ DOV – DeFi options vault
 Liquidity - efficiency or ease with which an asset or security can be converted into ready cash without affecting its market price
 
 Liquidity (in crypto) - the ease or rapidity with which one can buy or sell a digital asset close to its market price
+
+Option Intrinsic Value – the difference between the option's strike or exercise price and the current market price of the underlying asset.
+
+Option Time Value – represents the extra premium that traders and investors are willing to pay for the option based on its potential to make a profit before the option expires. Time value is influenced by factors such as the time remaining until expiration, the volatility of the underlying asset, interest rates, and dividends if applicable. Time value accounts for the risk or uncertainty associated with holding the option over time. 
 
 ## Optimization ideas
 
