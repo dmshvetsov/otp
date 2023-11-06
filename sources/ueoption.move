@@ -778,8 +778,12 @@ module otp::ueoption_test {
             ETestExpectationFailure // no remaining supply left
         );
         assert!(
+            primary_fungible_store::balance(buyer_address, created_option_object) == 1,
+            ETestExpectationFailure // buyer owns the underwrited option
+        );
+        assert!(
             primary_fungible_store::balance(issuer_address, created_option_object) == 0,
-            ETestExpectationFailure // issuer does not own his options
+            ETestExpectationFailure // issuer does not own the underwrited option
         );
         assert!(
             coin::balance<ueoption::UsdCoin>(buyer_address) == 9,
@@ -914,7 +918,7 @@ module otp::ueoption_test {
 
         teardown_test_framework(burn_cap, mint_cap);
     }
-
+    
     #[test()]
     fun test_get_asset_price_wbtc() {
         let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
