@@ -620,6 +620,12 @@ module otp::ueoption_test {
     // FIXME: why it is required?
     const RA_SEED: vector<u8> = b"RA_UEOPTION";
     
+    // https://pyth.network/developers/price-feed-ids#aptos-testnet
+    // WBTC/USD price feed id testnet
+    const WBTC_PRICE_ID: vector<u8> = x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed";
+    // APT/USD price feed id testnet
+    const APT_PRICE_ID: vector<u8> = x"44a93dddd8effa54ea51076c4e851b6cbbfd938e82eb90197de38fe8876bb66e";
+    
     const ETestExpectationFailure: u64 = 100;
 
     #[test(admin = @admin_address)]
@@ -991,7 +997,42 @@ module otp::ueoption_test {
     }
     
     #[test(admin = @admin_address)]
-    fun test_settle_price_not_changed(admin: &signer) {
+    fun test_settle_call_euro_option_price_not_changed(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
+        
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
+
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        let option_name = string::utf8(b"APT_USD-19700204-C-1U0000"); 
+
+        ueoption::buy(&buyer, option_name, 3);
+        
+        timestamp::fast_forward_seconds((options_expiry_ms / 1_000_000));
+
+        ueoption::settle(admin, option_name);
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 120,
+            ETestExpectationFailure // the option collateral is returned to the options issuer
+        );
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
+
+    #[test(admin = @admin_address)]
+    fun test_settle_call_euro_option_price_decreased(admin: &signer) {
         let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
         let now = 1;
         timestamp::fast_forward_seconds(now);
@@ -1088,7 +1129,7 @@ module otp::ueoption_test {
                     timestamp::now_seconds() - 1, 
                     timestamp::now_seconds() - 2, 
                     price_feed::new(
-                        price_identifier::from_byte_vec(x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed"),
+                        price_identifier::from_byte_vec(WBTC_PRICE_ID),
                         price::new(
                             i64::new(2594760112405, false),
                             830112404,
@@ -1120,7 +1161,7 @@ module otp::ueoption_test {
                     timestamp::now_seconds() - 1, 
                     timestamp::now_seconds() - 2, 
                     price_feed::new(
-                        price_identifier::from_byte_vec(x"ea0459ab2954676022baaceadb472c1acc97888062864aa23e9771bae3ff36ed"),
+                        price_identifier::from_byte_vec(WBTC_PRICE_ID),
                         price::new(
                             i64::new(2600150002888, false),
                             830112404,
