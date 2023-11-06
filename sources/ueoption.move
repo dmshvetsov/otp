@@ -68,6 +68,8 @@ module otp::ueoption {
     const OPTION_PROPERTY_PREMIUM_KEY: vector<u8> = b"premium";
     const OPTION_PROPERTY_ISSUER_ADDRESS_KEY: vector<u8> = b"issuer_address";
     const OPTION_PROPERTY_MULTIPLIER_KEY: vector<u8> = b"multiplier";
+    const OPTION_PROPERTY_ASSET_KEY: vector<u8> = b"asset";
+    const OPTION_PROPERTY_TOTAL_SUPPLY_KEY: vector<u8> = b"total_supply";
 
     /**
      *  errors
@@ -211,6 +213,30 @@ module otp::ueoption {
         )
     }
     // public entry fun cancel() {}
+    
+    public fun settle(settler: &signer, option_name: String) acquires Repository {
+        let option_address = get_option_address_with_name(&option_name);
+        assert!(
+            exists<ProtocolOption>(option_address),
+            EOptionNotFound
+        );
+
+        let option_object = object::address_to_object<ProtocolOption>(option_address);
+        let option_issuer_address = property_map::read_address(
+            &option_object,
+            &string::utf8(OPTION_PROPERTY_ISSUER_ADDRESS_KEY)
+        );
+        let option_asset = property_map::read_bytes(
+            &option_object,
+            &string::utf8(OPTION_PROPERTY_ASSET_KEY)
+        );
+        let option_total_supply = property_map::read_u64(
+            &option_object,
+            &string::utf8(OPTION_PROPERTY_TOTAL_SUPPLY_KEY)
+        );
+
+        release_collateral(option_issuer_address, option_asset, option_total_supply);
+    }
 
     /// Updates the Pyth price feeds using the given pyth_update_data, and then returns
     /// the BTC/USD price.
@@ -363,7 +389,7 @@ module otp::ueoption {
         issuer_address: address,
         royalty: u64,
         expiry_ms: u64,
-        supply_amount: u64,
+        total_supply_amount: u64,
         multiplier: u64,
         premium: u64
     ): String {
@@ -409,7 +435,7 @@ module otp::ueoption {
         );
         property_map::add_typed(
             &property_mutator_ref,
-            string::utf8(b"issuer_address"),
+            string::utf8(OPTION_PROPERTY_ISSUER_ADDRESS_KEY),
             issuer_address
         );
         property_map::add_typed(
@@ -422,10 +448,20 @@ module otp::ueoption {
             string::utf8(b"premium"),
             premium
         );
+        property_map::add_typed(
+            &property_mutator_ref,
+            string::utf8(OPTION_PROPERTY_ASSET_KEY),
+            asset
+        );
+        property_map::add_typed(
+            &property_mutator_ref,
+            string::utf8(OPTION_PROPERTY_TOTAL_SUPPLY_KEY),
+            total_supply_amount
+        );
 
         primary_fungible_store::create_primary_store_enabled_fungible_asset(
             &constructor_ref,
-            option::some((supply_amount as u128)),
+            option::some((total_supply_amount as u128)),
             token_name,
             string::utf8(b"OTC"), // FIXME: need a system for options symbols, max length 10
             get_asset_decimals(asset),
@@ -461,6 +497,25 @@ module otp::ueoption {
         };
 
         abort EUnsupportedAsset // can't collaterize unsupported asset
+    }
+    
+    fun release_collateral(asset_owner: address, asset: vector<u8>, amount: u64) acquires Repository {
+        let ra_address = get_resource_account_address();
+        let repo = borrow_global<Repository>(ra_address);
+        let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
+
+        if (asset == ASSET_WBTC) {
+            abort ENotImplemented
+        } else if (asset == ASSET_APT) {
+            coin::transfer<AptosCoin>(
+                &ra_signer,
+                asset_owner,
+                amount
+            );
+            return
+        };
+
+        abort EUnsupportedAsset
     }
 
     //=
@@ -919,6 +974,45 @@ module otp::ueoption_test {
         teardown_test_framework(burn_cap, mint_cap);
     }
     
+    #[test(admin = @admin_address)]
+    fun test_settle_price_not_changed(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+
+        let option_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, option_expiry_ms);
+        
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 120);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, 10);
+
+        ueoption::underwrite(&issuer, b"APT", 100, 10, 2);
+        let option_name = string::utf8(b"APT_USD-19700204-C-1U0000"); 
+
+        ueoption::buy(&buyer, option_name, 3);
+        
+        timestamp::fast_forward_seconds(option_expiry_ms + 1_000);
+
+        ueoption::settle(admin, option_name);
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 120,
+            ETestExpectationFailure // collateral is returned to the options issuer
+        );
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
+
+    // #[test(admin = @admin_address)]
+    // fun test_settle_effective_option_failure(admin: &signer) {
+    // }
+
     #[test()]
     fun test_get_asset_price_wbtc() {
         let (_aptos_framework, burn_cap, mint_cap) = setup_test_framework();
