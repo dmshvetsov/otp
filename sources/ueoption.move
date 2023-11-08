@@ -53,7 +53,6 @@ module otp::ueoption {
 
     // Option states
     const OPTION_STATE_CANCELED: u8 = 0;
-    const OPTION_STATE_INITIALIZED: u8 = 1;
     const OPTION_STATE_EXERCISED: u8 = 2;
     const OPTION_STATE_EXPIRED: u8 = 3;
 
@@ -61,10 +60,9 @@ module otp::ueoption {
     const COLLECTION_NAME: vector<u8> = b"OTP";
     const COLLECTION_DESCRIPTION: vector<u8> = b"the option trading protocol collection";
     const COLLECTION_URI: vector<u8> = b"FIXME";
-    const LE_TOKEN_DESCRIPTION: vector<u8> = b"the option trading protocol locked expiration option";
-    const LE_TOKEN_URI: vector<u8> = b"FIXME";
+    const TOKEN_DESCRIPTION: vector<u8> = b"FIXME";
+    const TOKEN_URI: vector<u8> = b"FIXME";
     // option token properties
-    const OPTION_PROPERTY_STATE_KEY: vector<u8> = b"state";
     const OPTION_PROPERTY_STRIKE_KEY: vector<u8> = b"strike";
     const OPTION_PROPERTY_EXPIRY_MS_KEY: vector<u8> = b"expiry_ms";
     const OPTION_PROPERTY_PREMIUM_KEY: vector<u8> = b"premium";
@@ -130,6 +128,7 @@ module otp::ueoption {
 
         // register coins for all supported assets
         coin::register<AptosCoin>(&ra);
+        // register quote coin
         managed_coin::initialize<UsdCoin>(admin, b"UsdStubCoin", b"USD", 6, false);
 
         move_to(
@@ -143,28 +142,27 @@ module otp::ueoption {
         );
     }
 
-    /// multiplier - option strike price in form of price * 100, e.g. strike 510 = 5.1
-    /// premium - premiu price to buy an single option in cents (cents * 100), e.g. premium 69 for single option = 0.69 
-    /// strike - option strike price in form of price * 100, e.g. strike 510 = 5.1
     public entry fun underwrite(
         issuer: &signer,
         asset: vector<u8>,
-        supply_amount: u64,
+        number_of_contracts: u64,
         multiplier: u64,
         premium: u64,
         strike: u64
     ) acquires Repository {
-        collaterize_asset(issuer, asset, supply_amount * multiplier);
+        collaterize_asset(issuer, asset, number_of_contracts * multiplier);
 
         let ra_address = get_resource_account_address();
         let repo = borrow_global_mut<Repository>(ra_address);
-        let expiry_ms = timestamp::now_microseconds() + repo.default_expiry_ms; // TODO: floor to start of the day, TODO: replace with argument, and checks for valid dates weekly, daily, monthly probably
         let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
-        let bucket_key = get_day_bucket(expiry_ms);
+
+        let expiry_ms = timestamp::now_microseconds() + repo.default_expiry_ms; // FIXME: floor to start of the day, TODO: replace with argument as number of days
         let issuer_address = signer::address_of(issuer);
         let option_name = create_option_object(
-            &ra_signer, asset, issuer_address, repo.sell_fee, strike, expiry_ms, supply_amount, multiplier, premium
+            &ra_signer, asset, issuer_address, repo.sell_fee, strike, expiry_ms, number_of_contracts, multiplier, premium
         );
+
+        let bucket_key = get_day_bucket(expiry_ms);
         if (simple_map::contains_key(&repo.options, &bucket_key)) {
             let expiry_bucket = simple_map::borrow_mut(&mut repo.options, &bucket_key);
             vector::push_back(
@@ -182,16 +180,17 @@ module otp::ueoption {
     }
 
     public entry fun buy(buyer: &signer, option_name: String, number_of_contracts: u64) acquires Repository, ProtocolOption {
-        let ra_address = get_resource_account_address();
-        let repo = borrow_global_mut<Repository>(ra_address);
+        // FIXME add check that buyer is not an issuer
         let option_address = get_option_address_with_name(&option_name);
         assert!(
             exists<ProtocolOption>(option_address),
             EOptionNotFound
         );
 
-        let option_object = object::address_to_object<ProtocolOption>(option_address);
+        let ra_address = get_resource_account_address();
+        let repo = borrow_global_mut<Repository>(ra_address);
 
+        let option_object = object::address_to_object<ProtocolOption>(option_address);
         let option_expiry_ms = property_map::read_u64(
             &option_object,
             &string::utf8(OPTION_PROPERTY_EXPIRY_MS_KEY)
@@ -217,9 +216,9 @@ module otp::ueoption {
         let total_cost = option_premium * number_of_contracts * option_multiplier;
         coin::transfer<UsdCoin>(buyer, option_issuer_address, total_cost);
 
-        let option_token = borrow_global<ProtocolOption>(option_address);
+        let option_meta = borrow_global<ProtocolOption>(option_address);
         primary_fungible_store::mint(
-            &option_token.mint_ref,
+            &option_meta.mint_ref,
             signer::address_of(buyer),
             number_of_contracts
         )
@@ -233,18 +232,20 @@ module otp::ueoption {
             EOptionNotFound
         );
 
+        let ra_address = get_resource_account_address();
+        let repo = borrow_global<Repository>(ra_address);
+
         let option_object = object::address_to_object<ProtocolOption>(option_address);
         let option_expiry_ms = property_map::read_u64(
             &option_object,
             &string::utf8(OPTION_PROPERTY_EXPIRY_MS_KEY)
         );
-        let ra_address = get_resource_account_address();
-        let repo = borrow_global<Repository>(ra_address);
         let expiry_bucket = simple_map::borrow(&repo.options, &get_day_bucket(option_expiry_ms));
         assert!(
             vector::contains(expiry_bucket, &option_name),
             EInternalError
         );
+
         assert!(
             timestamp::now_microseconds() >= option_expiry_ms,
             EEuropeanOptionDoesNotExpire
@@ -255,7 +256,6 @@ module otp::ueoption {
         let options_amount = primary_fungible_store::balance(option_holder_address, option_meta);
         let pnl = option_pnl(&option_object, options_amount);
         if (options_amount > 0 && pnl.profit) {
-            // TODO check if it is a biyer/holder of the option
             // TODO buyer and issuer should setle this option by itself in separate tx
             execute_option(settler, &option_object, options_amount);
         };
@@ -288,6 +288,10 @@ module otp::ueoption {
 
         // TODO burn option
     }
+    
+    // =
+    // = business logic functions
+    // =
     
     fun execute_option(buyer: &signer, option_object: &Object<ProtocolOption>, number_of_contracts: u64) acquires Repository {
         let strike = property_map::read_u64(
@@ -344,12 +348,12 @@ module otp::ueoption {
         // TODO: dynamically check how many digits on right before asset will be single digit
         let number_of_decimals: u8 = if (asset == ASSET_WBTC) {
             // e.g 25900 BTC has 4 digits before it became 2 USD per BTC, thus option has 4 decimals
-            4
+            0
         } else if (asset == ASSET_APT) {
             // e.g 5.8 APT has 0 digits before it became 5 USD per APT, thus option has 0 decimals
             0
         } else {
-            // 32 is max decimls possible in Aptos network
+            // value to trhow an error, 32 is max decimls possible in Aptos network
             33
         };
         assert!(number_of_decimals < 33, EUnsupportedAsset);
@@ -440,7 +444,7 @@ module otp::ueoption {
 
     /// call option formula
     /// PnL = (Price At Expiration - Strike Price - Premium Paid) * Contract Multiplier * Number Of Contracts
-    //// max losses = Premium Paid
+    /// max losses = Premium Paid
     fun option_pnl(option_object: &Object<ProtocolOption>, number_of_contracts: u64): Pnl {
         let strike = property_map::read_u64(
             option_object,
@@ -460,7 +464,8 @@ module otp::ueoption {
         );
         let pyth_price = get_asset_price(asset);
         let market_price = i64::get_magnitude_if_positive(&price::get_price(&pyth_price));
-        if (market_price > strike) {
+        if (market_price >= strike) {
+            // includes option buyer profit case and breakeven case
            return Pnl { value: (market_price - strike - premium) * multiplier * number_of_contracts, profit: true }
         };
        return Pnl { value: premium * multiplier * number_of_contracts, profit: false } // FIXME something is broken here for euro_option_in_profit test
@@ -489,20 +494,20 @@ module otp::ueoption {
         creator: &signer,
         asset: vector<u8>,
         issuer_address: address,
-        royalty: u64,
+        royalty_pts: u64,
         strike: u64,
         expiry_ms: u64,
-        total_supply_amount: u64,
+        number_of_contracts: u64,
         multiplier: u64,
         premium: u64
     ): String {
         let token_name = string::utf8(
             derive_option_name(string::utf8(asset), expiry_ms, OPTION_CALL, 1_000, 3) // FIMXME get strike price
         );
-        let royalty = if (royalty > 0) {
+        let royalty = if (royalty_pts > 0) {
             let ra_address = get_resource_account_address();
             option::some(
-                royalty::create(royalty, 100, ra_address)
+                royalty::create(royalty_pts, 100, ra_address)
             )
         } else {
             option::none()
@@ -510,10 +515,10 @@ module otp::ueoption {
         let constructor_ref = token::create_named_token(
             creator,
             string::utf8(COLLECTION_NAME),
-            string::utf8(LE_TOKEN_DESCRIPTION),
+            string::utf8(TOKEN_DESCRIPTION),
             token_name,
             royalty,
-            string::utf8(LE_TOKEN_URI),
+            string::utf8(TOKEN_URI),
         );
         let object_signer = object::generate_signer(&constructor_ref);
 
@@ -530,11 +535,6 @@ module otp::ueoption {
             &property_mutator_ref,
             string::utf8(b"expiry_ms"),
             expiry_ms
-        );
-        property_map::add_typed(
-            &property_mutator_ref,
-            string::utf8(OPTION_PROPERTY_STATE_KEY),
-            OPTION_STATE_INITIALIZED
         );
         property_map::add_typed(
             &property_mutator_ref,
@@ -559,14 +559,14 @@ module otp::ueoption {
         property_map::add_typed(
             &property_mutator_ref,
             string::utf8(OPTION_PROPERTY_TOTAL_SUPPLY_KEY),
-            total_supply_amount
+            number_of_contracts
         );
 
         primary_fungible_store::create_primary_store_enabled_fungible_asset(
             &constructor_ref,
-            option::some((total_supply_amount as u128)),
+            option::some((number_of_contracts as u128)),
             token_name,
-            string::utf8(b"OTC"), // FIXME: need a system for options symbols, max length 10
+            string::utf8(b"OTC"), // TODO: need a system for options symbols, max length 10
             get_asset_decimals(asset),
             get_asset_icon_uri(asset),
             string::utf8(COLLECTION_URI),
@@ -587,10 +587,10 @@ module otp::ueoption {
     }
     
     fun collaterize_asset(asset_owner: &signer, asset: vector<u8>, amount: u64) {
-        let ra_address = get_resource_account_address();
         if (asset == ASSET_WBTC) {
             abort ENotImplemented
         } else if (asset == ASSET_APT) {
+            let ra_address = get_resource_account_address();
             coin::transfer<AptosCoin>(
                 asset_owner,
                 ra_address,
@@ -603,17 +603,12 @@ module otp::ueoption {
     }
     
     fun release_collateral(asset_owner: address, asset: vector<u8>, amount: u64) acquires Repository {
-        if (amount <= 0) {
-            return
-        };
-
-        let ra_address = get_resource_account_address();
-        let repo = borrow_global<Repository>(ra_address);
-        let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
-
         if (asset == ASSET_WBTC) {
             abort ENotImplemented
         } else if (asset == ASSET_APT) {
+            let ra_address = get_resource_account_address();
+            let repo = borrow_global<Repository>(ra_address);
+            let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
             coin::transfer<AptosCoin>(
                 &ra_signer,
                 asset_owner,
@@ -632,7 +627,7 @@ module otp::ueoption {
     fun get_option_address_with_name(token_name: &String): address {
         let ra_address = get_resource_account_address();
         token::create_token_address(
-            &ra_address, // FIXME could be wron, and address need to be gen from capability
+            &ra_address,
             &string::utf8(COLLECTION_NAME),
             token_name
         )
@@ -642,13 +637,6 @@ module otp::ueoption {
         let token_name = derive_option_name(string::utf8(asset), expiry_ms, OPTION_CALL, 1_000, 3); // FIXME get strike price
         get_option_address_with_name(&string::utf8(token_name))
     }
-
-    // public(friend) fun get_option_owned_amount(owner_address: address, option_address: address): u64 {
-    //     let option_object = object::address_to_object<ProtocolOption>(option_address);
-    //     let metadata = object::convert<ProtocolOption, Metadata>(option_object);
-    //     let store = primary_fungible_store::ensure_primary_store_exists(owner_address, metadata);
-    //     fungible_asset::balance(store)
-    // }
 
     //=
     //= assertions
@@ -842,10 +830,6 @@ module otp::ueoption_test {
         );
 
         let created_option_object = object::address_to_object<ProtocolOption>(expected_new_option_address);
-        assert!(
-            property_map::read_u8(&created_option_object, &string::utf8(b"state")) == 1,
-            ETestExpectationFailure // state is 1, initialized
-        );
         assert!(
             property_map::read_address(&created_option_object, &string::utf8(b"issuer_address")) == issuer_address,
             ETestExpectationFailure 
