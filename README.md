@@ -1,8 +1,4 @@
-examples:
-- https://github.com/gmondok/ChainlinkCallOptions/blob/main/chainlinkOptions.sol
-
-list of Aptos coins
-- https://aptoscan.com/coins
+# (Open) Option Trading Protocol - OPT
 
 ## Roadmap
 
@@ -48,9 +44,17 @@ For more info about OSI, search for "OPTIONS SYMBOLOGY INITIATIVE IMPLEMENTATION
 - http://git.musl-libc.org/cgit/musl/tree/src/time/__secs_to_tm.c?h=v0.9.15
 - https://opensource.apple.com/source/ntp/ntp-13/ntp/libntp/mktime.c
 
+## Similar protocols
+
+- https://github.com/gmondok/ChainlinkCallOptions/blob/main/chainlinkOptions.sol
+
 ## useful move libraries
 
 - https://github.com/pentagonxyz/movemate
+
+## Relevant links 
+
+- list of Aptos coins https://aptoscan.com/coins
 
 ## Glossary
 
@@ -74,3 +78,6 @@ EMA Price (Feed) – exponentially-weighted moving average of the price. These v
 - [ ] convert timestamp in the option name to date in format `08SEP2023`
 - [ ] maybe it is better to use u128 for supply_amount for option tokens on creation
 - [ ] freeze collaterized asset on the option issuer account instead of transfer it to resource account address
+- [ ] extract option object and related fun to separate module european option
+- [ ] take into account Pyth price confidence and/or price EMA
+- [ ] round strike and premium to USD cents
