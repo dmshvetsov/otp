@@ -1,4 +1,4 @@
-# (Open) Option Trading Protocol - OPT
+# (Open) Option Trading Protocol - OTP
 
 ## Roadmap
 
