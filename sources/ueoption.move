@@ -70,6 +70,7 @@ module otp::ueoption {
     const OPTION_PROPERTY_MULTIPLIER_KEY: vector<u8> = b"multiplier";
     const OPTION_PROPERTY_ASSET_KEY: vector<u8> = b"asset";
     const OPTION_PROPERTY_TOTAL_SUPPLY_KEY: vector<u8> = b"total_supply";
+    const OPTION_PROPERTY_TOTAL_SOLD_KEY: vector<u8> = b"total_sold";
 
     /**
      *  errors
@@ -91,6 +92,8 @@ module otp::ueoption {
         property_mutator_ref: property_map::MutatorRef,
         mint_ref: fungible_asset::MintRef,
         burn_ref: fungible_asset::BurnRef,
+        // 1 collaterized, 0 collateral withdrewed
+        status: u8,
     }
 
     struct Repository has key {
@@ -180,7 +183,7 @@ module otp::ueoption {
     }
 
     public entry fun buy(buyer: &signer, option_name: String, number_of_contracts: u64) acquires Repository, ProtocolOption {
-        // FIXME add check that buyer is not an issuer
+        // TODO: add check that buyer is not an issuer
         let option_address = get_option_address_with_name(&option_name);
         assert!(
             exists<ProtocolOption>(option_address),
@@ -221,11 +224,23 @@ module otp::ueoption {
             &option_meta.mint_ref,
             signer::address_of(buyer),
             number_of_contracts
-        )
+        );
+        
+        let option_total_sold = property_map::read_u64(
+            &option_object,
+            &string::utf8(OPTION_PROPERTY_TOTAL_SOLD_KEY)
+        );
+        property_map::update_typed(
+            &option_meta.property_mutator_ref,
+            &string::utf8(OPTION_PROPERTY_TOTAL_SOLD_KEY),
+            option_total_sold + number_of_contracts
+        );
     }
+
+    // TODO: calncel existing underwrite option
     // public entry fun cancel() {}
     
-    public fun settle(settler: &signer, option_name: String) acquires Repository {
+    public fun settle(settler: &signer, option_name: String) acquires Repository, ProtocolOption {
         let option_address = get_option_address_with_name(&option_name);
         assert!(
             exists<ProtocolOption>(option_address),
@@ -250,43 +265,67 @@ module otp::ueoption {
             timestamp::now_microseconds() >= option_expiry_ms,
             EEuropeanOptionDoesNotExpire
         );
-        
-        let option_meta = object::address_to_object<ProtocolOption>(object::object_address(&option_object));
-        let option_holder_address = signer::address_of(settler);
-        let options_amount = primary_fungible_store::balance(option_holder_address, option_meta);
-        let pnl = option_pnl(&option_object, options_amount);
-        if (options_amount > 0 && pnl.profit) {
-            // TODO buyer and issuer should setle this option by itself in separate tx
-            execute_option(settler, &option_object, options_amount);
-        };
 
-        // TODO buyer and issuer should setle this option by itself in separate tx
+        let option_total_sold = property_map::read_u64(
+            &option_object,
+            &string::utf8(OPTION_PROPERTY_TOTAL_SOLD_KEY)
+        );
+        if (option_total_sold == 0) {
+            return
+        };
+        
         let option_issuer_address = property_map::read_address(
             &option_object,
             &string::utf8(OPTION_PROPERTY_ISSUER_ADDRESS_KEY)
         );
-        let option_asset = property_map::read_bytes(
-            &option_object,
-            &string::utf8(OPTION_PROPERTY_ASSET_KEY)
-        );
-        let option_multiplier = property_map::read_u64(
-            &option_object,
-            &string::utf8(OPTION_PROPERTY_MULTIPLIER_KEY)
-        );
-        if (pnl.profit) {
-            let option_meta = object::address_to_object<ProtocolOption>(object::object_address(&option_object));
-            let unused_collateral_amount = *option::borrow(&fungible_asset::maximum(option_meta)) - *option::borrow(&fungible_asset::supply(option_meta));
-            // FIXME when every buyer will settle his profits this will be called multiple time but must be called once
-            release_collateral(option_issuer_address, option_asset, (unused_collateral_amount as u64) * option_multiplier);
-        } else {
+        
+        let option_holder_address = signer::address_of(settler);
+        let number_of_contracts = primary_fungible_store::balance(option_holder_address, option_object);
+        if (number_of_contracts == 0 && signer::address_of(settler) != option_issuer_address) {
+            return
+        };
+
+        let pnl = option_pnl(&option_object, number_of_contracts);
+        let option_meta = borrow_global_mut<ProtocolOption>(option_address);
+        if (signer::address_of(settler) == option_issuer_address && option_meta.status == 1) {
+            // issuer settlement
+            let option_asset = property_map::read_bytes(
+                &option_object,
+                &string::utf8(OPTION_PROPERTY_ASSET_KEY)
+            );
+            let option_multiplier = property_map::read_u64(
+                &option_object,
+                &string::utf8(OPTION_PROPERTY_MULTIPLIER_KEY)
+            );
             let option_total_supply = property_map::read_u64(
                 &option_object,
                 &string::utf8(OPTION_PROPERTY_TOTAL_SUPPLY_KEY)
             );
-            release_collateral(option_issuer_address, option_asset, option_total_supply * option_multiplier);
-        }
-
-        // TODO burn option
+            if (pnl.profit) {
+                release_collateral(
+                    option_issuer_address,
+                    option_asset,
+                    (option_total_supply - option_total_sold) * option_multiplier
+                );
+            } else {
+                release_collateral(
+                    option_issuer_address, 
+                    option_asset,
+                    option_total_supply * option_multiplier
+                );
+            };
+            option_meta.status = 0;
+        } else {
+            // option buyer settlement
+            if (number_of_contracts > 0 && pnl.profit) {
+                execute_option(settler, &option_object, number_of_contracts);
+                primary_fungible_store::burn(
+                    &option_meta.burn_ref,
+                    signer::address_of(settler),
+                    number_of_contracts
+                );
+            };
+        };
     }
     
     // =
@@ -560,6 +599,11 @@ module otp::ueoption {
             string::utf8(OPTION_PROPERTY_TOTAL_SUPPLY_KEY),
             number_of_contracts
         );
+        property_map::add_typed(
+            &property_mutator_ref,
+            string::utf8(OPTION_PROPERTY_TOTAL_SOLD_KEY),
+            0
+        );
 
         primary_fungible_store::create_primary_store_enabled_fungible_asset(
             &constructor_ref,
@@ -579,6 +623,7 @@ module otp::ueoption {
                 property_mutator_ref,
                 mint_ref,
                 burn_ref,
+                status: 1,
             }
         );
 
@@ -1123,8 +1168,7 @@ module otp::ueoption_test {
             ]
         );
 
-        // anyone can settle expirend option that not in profit for buyer
-        ueoption::settle(admin, option_name);
+        ueoption::settle(&issuer, option_name);
         assert!(
             coin::balance<AptosCoin>(issuer_address) == 1000,
             ETestExpectationFailure // the option collateral is returned to the options issuer in full
@@ -1133,6 +1177,7 @@ module otp::ueoption_test {
             coin::balance<ueoption::UsdCoin>(issuer_address) == 60_000_000,
             ETestExpectationFailure
         );
+        ueoption::settle(&buyer, option_name);
         assert!(
             coin::balance<ueoption::UsdCoin>(buyer_address) == 0,
             ETestExpectationFailure
@@ -1193,17 +1238,90 @@ module otp::ueoption_test {
             ]
         );
 
-        // only buyer can settle in profit option
-        ueoption::settle(&buyer, option_name);
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 0,
+            ETestExpectationFailure // initial 1000 - underwrite 100 contracts * 10 APT per contract (multiplier) = 0
+        );
+        ueoption::settle(&issuer, option_name);
 
         assert!(
             coin::balance<AptosCoin>(issuer_address) == 970,
             ETestExpectationFailure // initial 1000 - 3 option * 10 multiplier (executed options) = 970 APT returned
         );
         assert!(
-            coin::balance<ueoption::UsdCoin>(issuer_address) == usd_coin_cents(10 * 3 * 2 + 510 * 3 * 10),
-            ETestExpectationFailure // initial balance 0 + 60 cents premium + 510 cents * 3 contracts * 10 multipliers= 51.60 USD
+            coin::balance<ueoption::UsdCoin>(issuer_address) == usd_coin_cents(60),
+            ETestExpectationFailure // initial balance 0 + 2 cents premium * 3 contracts * 10 multipliers= 0.60 USD
         );
+        assert!(
+            coin::balance<AptosCoin>(buyer_address) == 0,
+            ETestExpectationFailure // initial balance 0
+        );
+        ueoption::settle(&buyer, option_name);
+        assert!(
+            coin::balance<AptosCoin>(buyer_address) == 3 * 10,
+            ETestExpectationFailure // initialy 0 + 3 options with 10 multipliers
+        );
+        assert!(
+            coin::balance<ueoption::UsdCoin>(buyer_address) == usd_coin_cents(1000_00 - 10 * 2 * 3 - 510 * 3 * 10),
+            ETestExpectationFailure // initial balance 1000 usd - 60 cents premium - 510 cents * 3 contracts * 10 multiplier
+        );
+
+        teardown_test_framework(burn_cap, mint_cap);
+    }
+
+    #[test(admin = @admin_address)]
+    fun test_repeated_settle_has_no_effect(admin: &signer) {
+        let (aptos_framework, burn_cap, mint_cap) = setup_test_framework();
+        let now = 1;
+        timestamp::fast_forward_seconds(now);
+        setup_price_oracle();
+
+        let options_expiry_ms = 2_000_000;
+        ueoption::initialize(admin, options_expiry_ms);
+        
+        let issuer_address = @0xA;
+        let buyer_address = @0xB;
+        let issuer = account::create_account_for_test(issuer_address);
+        let buyer = account::create_account_for_test(buyer_address);
+        coin::register<AptosCoin>(&issuer);
+        coin::register<ueoption::UsdCoin>(&issuer);
+        aptos_coin::mint(&aptos_framework, issuer_address, 1000);
+        coin::register<AptosCoin>(&buyer);
+        coin::register<ueoption::UsdCoin>(&buyer);
+        managed_coin::mint<ueoption::UsdCoin>(admin, buyer_address, usd_coin_cents(1000_00));
+
+        ueoption::underwrite(&issuer, b"APT", 100, 10, usd_coin_cents(2), usd_coin_cents(510));
+        let option_name = string::utf8(b"APT_USD-19700204-C-5U1000"); 
+
+        // buy 3 option * 10 multiplier = 30 APT_USD option with total cost 30 * 2 cents = 0.6 USD
+        ueoption::buy(&buyer, option_name, 3); 
+        
+        timestamp::fast_forward_seconds((options_expiry_ms / 1_000_000) + 1);
+        pyth_test::update_cache_for_test(
+            vector[
+                price_info::new(
+                    timestamp::now_seconds() - 1, 
+                    timestamp::now_seconds() - 2, 
+                    price_feed::new(
+                        price_identifier::from_byte_vec(APT_PRICE_ID),
+                        price::new(
+                            i64::new(520000000, false),
+                            0,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                        price::new(
+                            i64::new(520000000, false),
+                            0,
+                            i64::new(8, true),
+                            timestamp::now_seconds() - 1,
+                        ),
+                    ),
+                ),
+            ]
+        );
+
+        ueoption::settle(&buyer, option_name);
         assert!(
             coin::balance<AptosCoin>(buyer_address) == 10 * 3,
             ETestExpectationFailure // initialy 0 + 3 options with 10 multipliers
@@ -1212,6 +1330,35 @@ module otp::ueoption_test {
             coin::balance<ueoption::UsdCoin>(buyer_address) == usd_coin_cents(1000_00 - 10 * 2 * 3 - 510 * 3 * 10),
             ETestExpectationFailure // initial balance 1000 usd - 60 cents premium - 510 cents * 3 contracts * 10 multiplier
         );
+        ueoption::settle(&buyer, option_name);
+        assert!(
+            coin::balance<AptosCoin>(buyer_address) == 10 * 3,
+            ETestExpectationFailure // initialy 0 + 3 options with 10 multipliers
+        );
+        assert!(
+            coin::balance<ueoption::UsdCoin>(buyer_address) == usd_coin_cents(1000_00 - 10 * 2 * 3 - 510 * 3 * 10),
+            ETestExpectationFailure // initial balance 1000 usd - 60 cents premium - 510 cents * 3 contracts * 10 multiplier
+        );
+
+        ueoption::settle(&issuer, option_name);
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 970,
+            ETestExpectationFailure // initial 1000 - 3 option * 10 multiplier (executed options) = 970 APT returned
+        );
+        assert!(
+            coin::balance<ueoption::UsdCoin>(issuer_address) == usd_coin_cents(10 * 3 * 2 + 510 * 3 * 10),
+            ETestExpectationFailure // initial balance 0 + 60 cents premium + 510 cents * 3 contracts * 10 multipliers= 51.60 USD
+        );
+        ueoption::settle(&issuer, option_name);
+        assert!(
+            coin::balance<AptosCoin>(issuer_address) == 970,
+            ETestExpectationFailure // initial 1000 - 3 option * 10 multiplier (executed options) = 970 APT returned
+        );
+        assert!(
+            coin::balance<ueoption::UsdCoin>(issuer_address) == usd_coin_cents(10 * 3 * 2 + 510 * 3 * 10),
+            ETestExpectationFailure // initial balance 0 + 60 cents premium + 510 cents * 3 contracts * 10 multipliers= 51.60 USD
+        );
+
 
         teardown_test_framework(burn_cap, mint_cap);
     }
