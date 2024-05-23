@@ -6,7 +6,7 @@ MVP
 
 - [x] underwrite a CALL option with collateral
 - [x] ability to buy a share
-- [ ] option settlement at expiry (european options)
+- [x] option settlement at expiry (european options)
 - [ ] scheduled worker to settle options
 - [ ] testnet launch
 
