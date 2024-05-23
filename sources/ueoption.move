@@ -515,7 +515,7 @@ module otp::ueoption {
             // includes option buyer profit case and breakeven case
            return Pnl { value: (market_price - strike - premium) * multiplier * number_of_contracts, profit: true }
         };
-       return Pnl { value: premium * multiplier * number_of_contracts, profit: false } // FIXME something is broken here for euro_option_in_profit test
+       return Pnl { value: premium * multiplier * number_of_contracts, profit: false }
     }
 
     public(friend) fun get_resource_account_address(): address {
@@ -524,7 +524,8 @@ module otp::ueoption {
 
     fun get_day_bucket(expiry_ms: u64): u64 {
         // 1_000_000 microseconds in second
-        expiry_ms / (24 * 60 * 60 * 1000000) // FIXME make a constant
+        let one_day_in_microsec = 24 * 60 * 60 * 1_000_000;
+        expiry_ms / one_day_in_microsec
     }
 
     fun create_collection(creator: &signer) {
@@ -652,7 +653,7 @@ module otp::ueoption {
             return
         };
 
-        abort EUnsupportedAsset // can't collaterize unsupported asset
+        abort EUnsupportedAsset
     }
     
     fun release_collateral(asset_owner: address, asset: vector<u8>, amount: u64) acquires Repository {
