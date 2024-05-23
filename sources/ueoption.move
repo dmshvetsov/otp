@@ -318,11 +318,12 @@ module otp::ueoption {
         } else {
             // option buyer settlement
             if (number_of_contracts > 0 && pnl.profit) {
-                execute_option(settler, &option_object, number_of_contracts);
-                primary_fungible_store::burn(
-                    &option_meta.burn_ref,
-                    signer::address_of(settler),
-                    number_of_contracts
+                execute_option(
+                    settler,
+                    &option_object,
+                    number_of_contracts,
+                    repo,
+                    option_meta
                 );
             };
         };
@@ -332,7 +333,13 @@ module otp::ueoption {
     // = business logic functions
     // =
     
-    fun execute_option(buyer: &signer, option_object: &Object<ProtocolOption>, number_of_contracts: u64) acquires Repository {
+    fun execute_option(
+        buyer: &signer,
+        option_object: &Object<ProtocolOption>,
+        number_of_contracts: u64,
+        repo: &Repository,
+        option_meta: &ProtocolOption
+    ) {
         let strike = property_map::read_u64(
             option_object,
             &string::utf8(OPTION_PROPERTY_STRIKE_KEY)
@@ -349,12 +356,14 @@ module otp::ueoption {
         let asset_total_cost = strike * number_of_contracts * multiplier;
         coin::transfer<UsdCoin>(buyer, issuer_address, asset_total_cost);
 
-        let ra_address = get_resource_account_address();
-        let repo = borrow_global<Repository>(ra_address);
         let ra_signer = account::create_signer_with_capability(&repo.signer_cap);
-        coin::transfer<AptosCoin>(&ra_signer, signer::address_of(buyer), number_of_contracts * multiplier)
+        coin::transfer<AptosCoin>(&ra_signer, signer::address_of(buyer), number_of_contracts * multiplier);
 
-        // TODO burn option
+        primary_fungible_store::burn(
+            &option_meta.burn_ref,
+            signer::address_of(buyer),
+            number_of_contracts
+        );
     }
     
     /// Updates the Pyth price feeds using the given pyth_update_data, and then returns
